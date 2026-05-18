@@ -1178,7 +1178,6 @@ function RulesV() {
             <Row title="Box Structure" body="Players are grouped into boxes of up to 4. Full round-robin within each box — 3 matches per round. New/returning players start in the Swing Box." />
             <Row title="Promotion & Relegation" body="Boxes are re-seeded each round based on ladder rank — the top-ranked players form Box 1, working down to the Swing Box. Win matches and earn points to climb the standings and earn a spot in a higher box next round. New players start in the Swing Box." />
             <Row title="Wild Cards" body="Each player gets 1 wild card cross-box match per round, randomly assigned." />
-            <Row title="Open Challenges" body="Open Challenges are unlimited — challenge anyone in the office for 2 bonus points. No penalty for a loss." />
             <Row title="Inactivity" body="No match in 42 days → marked inactive and dropped to the bottom of the standings." last />
           </Section>
           <Section title="DRA House Bar Rules" color={P.blue}>
@@ -1231,22 +1230,6 @@ function RulesV() {
               ))}
             </div>
           </Section>
-          <Section title="Open Challenges">
-            <div style={{ borderRadius: 12, overflow: "hidden", border: "1px solid rgba(255,255,255,.1)" }}>
-              {[
-                ["Win", "Defeat any opponent in an open challenge", "+2 pts", P.blue],
-                ["Loss", "Open challenge loss — no penalty", "0 pts", P.dim],
-              ].map(([result, desc, pts, color], i) => (
-                <div key={result} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", background: i % 2 === 0 ? "rgba(0,48,82,.4)" : "transparent", borderBottom: i < 1 ? "1px solid rgba(255,255,255,.05)" : "none" }}>
-                  <div style={{ flex: 1 }}>
-                    <p style={{ fontSize: 13, fontWeight: 700, color: P.off, marginBottom: 2 }}>{result}</p>
-                    <p style={{ fontSize: 10, color: P.dim }}>{desc}</p>
-                  </div>
-                  <span style={{ fontSize: 20, fontWeight: 700, color, minWidth: 48, textAlign: "right" }}>{pts}</span>
-                </div>
-              ))}
-            </div>
-          </Section>
           <div style={{ ...gc, background: "rgba(21,152,203,.06)", border: "1px solid rgba(21,152,203,.2)" }}>
             <h4 style={{ fontSize: 13, fontWeight: 700, color: P.blue, marginBottom: 10 }}>Best Possible Round</h4>
             <p style={{ fontSize: 12, color: P.grey, lineHeight: 1.8 }}>
@@ -1254,7 +1237,6 @@ function RulesV() {
               Box winner bonus → <span style={{ color: P.orange, fontWeight: 700 }}>+3 pts</span><br />
               Wild card shutout win → <span style={{ color: P.orange, fontWeight: 700 }}>+5 pts</span><br />
               <span style={{ color: P.off, fontWeight: 700, fontSize: 13 }}>Box/WC total: 23 pts</span><br />
-              <span style={{ color: P.blue, fontSize: 11 }}>+ Open challenges: +2 pts each (unlimited)</span>
             </p>
           </div>
         </div>
