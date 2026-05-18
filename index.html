@@ -1,0 +1,1918 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <title>DRA Pool League</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#x1F3B1;</text></svg>">
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+  <style>
+    html,body{margin:0;padding:0;background:#001B36;overflow-x:hidden}
+    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+  </style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+  firebase.initializeApp({apiKey:"AIzaSyAG8aKelf-EcJLXoqJ83-IfneQfHf8yIPI",authDomain:"dra-pool-575.firebaseapp.com",projectId:"dra-pool-575",storageBucket:"dra-pool-575.firebasestorage.app",messagingSenderId:"622821170514",appId:"1:622821170514:web:cdfcbd5a49b09b506b2e8b"});
+  var db=firebase.firestore();var DOC_REF=db.collection("league").doc("state");
+</script>
+<script type="text/babel">
+const { useState, useEffect, useCallback, useMemo } = React;
+
+
+const fmtDate = (iso) => { if (!iso) return ""; const d = new Date(iso); return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }); };
+const P = { navy:"#001B36", mid:"#003052", blue:"#1598CB", orange:"#F18A00", amber:"#FFAD33", white:"#FFF", off:"#C8DAE8", grey:"#9BB0C4", dim:"#6A8AA0", glass:"rgba(255,255,255,.05)", gb:"rgba(255,255,255,.12)", ok:"#34D399", bad:"#F87171", wc:"#C4A1FF" };
+const uid = () => Math.random().toString(36).slice(2, 9);
+const nw = () => new Date().toISOString();
+const dd = (a, b) => Math.abs(new Date(a) - new Date(b)) / 864e5;
+function shuf(a) { const b=[...a]; for(let i=b.length-1;i>0;i--){const j=0|Math.random()*(i+1);[b[i],b[j]]=[b[j],b[i]];} return b; }
+
+function buildBoxes(ids, lad, randomize = false) {
+  let rk = lad.filter(s => ids.includes(s.id)); if (randomize) rk = shuf(rk); const bx = []; let i = 0;
+  while (i < rk.length) { const rem = rk.length - i;
+    if (rem <= 6) { bx.push({ name: "Swing Box", isSwing: true, players: rk.slice(i).map(s => s.id) }); break; }
+    bx.push({ name: "Box " + (bx.length + 1), isSwing: false, players: rk.slice(i, i + 4).map(s => s.id) }); i += 4; }
+  if (bx.length && !bx[bx.length - 1].isSwing) { bx[bx.length - 1].isSwing = true; bx[bx.length - 1].name = "Swing Box"; }
+  return bx;
+}
+function genBM(boxes) { const m = []; boxes.forEach((b, bi) => { for (let i = 0; i < b.players.length; i++) for (let j = i + 1; j < b.players.length; j++) m.push({ id: uid(), type: "box", box: bi, boxName: b.name, player1: b.players[i], player2: b.players[j], score1: null, score2: null, completed: false, completedAt: null }); }); return m; }
+function genWC(boxes) {
+  if (boxes.length < 2) return [];
+  const wc = [], used = new Set();
+  let all = boxes.flatMap((b, bi) => b.players.map(p => ({ id: p, box: bi })));
+  if (all.length % 2 !== 0) {
+    let removeIdx = -1;
+    for (let i = all.length - 1; i >= 0; i--) { if (boxes[all[i].box] && boxes[all[i].box].isSwing) { removeIdx = i; break; } }
+    if (removeIdx === -1) removeIdx = all.length - 1;
+    all.splice(removeIdx, 1);
+  }
+  // Try multiple shuffles to maximize pairings
+  let bestWC = [], bestUsed = new Set();
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const sh = shuf(all);
+    const tryWC = [], tryUsed = new Set();
+    for (const p of sh) {
+      if (tryUsed.has(p.id)) continue;
+      const c = sh.find(x => x.box !== p.box && !tryUsed.has(x.id));
+      if (!c) continue;
+      tryUsed.add(p.id); tryUsed.add(c.id);
+      tryWC.push({ id: uid(), type: "wildcard", player1: p.id, player2: c.id, score1: null, score2: null, completed: false, completedAt: null });
+    }
+    if (tryWC.length > bestWC.length) { bestWC = tryWC; bestUsed = tryUsed; }
+    if (tryUsed.size >= all.length) break; // All paired, no need to retry
+  }
+  return bestWC;
+}
+
+function boxSt(pids, matches) {
+  const s = {}; pids.forEach(id => { s[id] = { id, pts: 0, w: 0, l: 0, rw: 0, rl: 0 }; });
+  matches.filter(m => m.completed).forEach(m => { if (!s[m.player1] || !s[m.player2]) return;
+    if (m.forfeit || (m.score1 === 0 && m.score2 === 0)) return;
+    s[m.player1].rw += m.score1; s[m.player1].rl += m.score2; s[m.player2].rw += m.score2; s[m.player2].rl += m.score1;
+    if (m.score1 > m.score2) { s[m.player1].pts += m.score2 === 0 ? 5 : 4; s[m.player1].w++; s[m.player2].pts += m.score2 > 0 ? 2 : 0; s[m.player2].l++; }
+    else { s[m.player2].pts += m.score1 === 0 ? 5 : 4; s[m.player2].w++; s[m.player1].pts += m.score1 > 0 ? 2 : 0; s[m.player1].l++; } });
+  return Object.values(s).sort((a, b) => {
+    if (b.pts !== a.pts) return b.pts - a.pts;
+    let aW = 0, bW = 0;
+    matches.filter(m => m.completed && !m.forfeit && ((m.player1 === a.id && m.player2 === b.id) || (m.player1 === b.id && m.player2 === a.id))).forEach(m => { if ((m.player1 === a.id && m.score1 > m.score2) || (m.player2 === a.id && m.score2 > m.score1)) aW++; else bW++; });
+    if (aW !== bW) return bW - aW;
+    return b.w - a.w || b.rw - a.rw || (b.rw - b.rl) - (a.rw - a.rl);
+  });
+}
+
+function calcLad(players, st) {
+  const s = {}; players.forEach(p => { s[p.id] = { id: p.id, name: p.name, points: 0, boxPts: 0, openPts: 0, wins: 0, losses: 0, rw: 0, rl: 0, mp: 0, last: p.joinedAt, inactive: false, streak: 0 }; });
+  const all = [...(st.boxMatches || []), ...(st.wildCards || []), ...(st.openChallenges || [])];
+  (st.pastCycles || []).forEach(c => { [...(c.boxMatches || []), ...(c.wildCards || []), ...(c.openChallenges || [])].forEach(m => all.push(m)); (c.bonuses || []).forEach(b => { if (s[b.id]) s[b.id].points += b.pts; }); });
+  // Sort by completedAt for streak calc
+  const sorted = all.filter(m => m.completed).sort((a, b) => (a.completedAt || "").localeCompare(b.completedAt || ""));
+  sorted.forEach(m => {
+    const a = s[m.player1], b = s[m.player2]; if (!a || !b) return;
+    if (m.forfeit || (m.score1 === 0 && m.score2 === 0)) return;
+    a.mp++; b.mp++; a.rw += m.score1; a.rl += m.score2; b.rw += m.score2; b.rl += m.score1;
+    if (m.completedAt) { if (m.completedAt > a.last) a.last = m.completedAt; if (m.completedAt > b.last) b.last = m.completedAt; }
+    if (m.type === "open") {
+      if (m.score1 > m.score2) { a.points += 2; a.openPts += 2; a.wins++; b.losses++; a.streak = a.streak > 0 ? a.streak + 1 : 1; b.streak = 0; }
+      else { b.points += 2; b.openPts += 2; b.wins++; a.losses++; b.streak = b.streak > 0 ? b.streak + 1 : 1; a.streak = 0; }
+    } else {
+      const w1 = m.score1 > m.score2; const wp = w1 ? (m.score2 === 0 ? 5 : 4) : (m.score1 === 0 ? 5 : 4); const lp = w1 ? (m.score2 > 0 ? 2 : 0) : (m.score1 > 0 ? 2 : 0);
+      if (w1) { a.points += wp; a.boxPts += wp; a.wins++; b.points += lp; b.boxPts += lp; b.losses++; a.streak = a.streak > 0 ? a.streak + 1 : 1; b.streak = 0; }
+      else { b.points += wp; b.boxPts += wp; b.wins++; a.points += lp; a.boxPts += lp; a.losses++; b.streak = b.streak > 0 ? b.streak + 1 : 1; a.streak = 0; } }
+  });
+  if (st.boxes && st.boxMatches) { st.boxes.forEach((box, bi) => { const bm = st.boxMatches.filter(m => m.box === bi); const realBM = bm.filter(m => m.completed && !m.forfeit && !(m.score1 === 0 && m.score2 === 0)); if (realBM.length > 0 && bm.every(m => m.completed)) { const bs = boxSt(box.players, realBM); if (bs[0] && s[bs[0].id]) { s[bs[0].id].points += 3; s[bs[0].id].boxPts += 3; } if (bs[1] && s[bs[1].id]) { s[bs[1].id].points += 1; s[bs[1].id].boxPts += 1; } } }); }
+  (st.pastCycles || []).forEach(c => { (c.bonuses || []).forEach(b => { if (s[b.id] && b.pts > 0) s[b.id].boxPts += b.pts; }); });
+  const t = nw(); players.forEach(p => { if (s[p.id].last && dd(t, s[p.id].last) > 42) s[p.id].inactive = true; });
+  const h2hMap = buildH2HMap(st);
+  return Object.values(s).sort((a, b) => { if (a.inactive !== b.inactive) return a.inactive ? 1 : -1; if (b.points !== a.points) return b.points - a.points; const h2h = getH2H(a.id, b.id, st, h2hMap); if (h2h && h2h.w1 !== h2h.w2) return h2h.w2 - h2h.w1; return b.wins - a.wins || b.rw - a.rw; });
+}
+
+// Build H2H lookup table in a single pass — O(m) instead of O(n^2 * m) when used in sort
+function buildH2HMap(st) {
+  const map = {};
+  const all = [...(st.boxMatches || []), ...(st.wildCards || []), ...(st.openChallenges || [])];
+  (st.pastCycles || []).forEach(c => { [...(c.boxMatches || []), ...(c.wildCards || []), ...(c.openChallenges || [])].forEach(m => all.push(m)); });
+  all.filter(m => m.completed && !m.forfeit && !(m.score1 === 0 && m.score2 === 0)).forEach(m => {
+    const k1 = m.player1 + ":" + m.player2;
+    const k2 = m.player2 + ":" + m.player1;
+    if (!map[k1]) map[k1] = { w1: 0, w2: 0 };
+    if (!map[k2]) map[k2] = { w1: 0, w2: 0 };
+    if (m.score1 > m.score2) { map[k1].w1++; map[k2].w2++; }
+    else { map[k1].w2++; map[k2].w1++; }
+  });
+  return map;
+}
+// Head-to-head record between two players (uses pre-built map if provided)
+function getH2H(p1, p2, st, h2hMap) {
+  if (h2hMap) { const r = h2hMap[p1 + ":" + p2]; return r && (r.w1 || r.w2) ? r : null; }
+  const all = [...(st.boxMatches || []), ...(st.wildCards || []), ...(st.openChallenges || [])];
+  (st.pastCycles || []).forEach(c => { [...(c.boxMatches || []), ...(c.wildCards || []), ...(c.openChallenges || [])].forEach(m => all.push(m)); });
+  let w1 = 0, w2 = 0;
+  all.filter(m => m.completed && !m.forfeit && !(m.score1 === 0 && m.score2 === 0)).forEach(m => {
+    if (m.player1 === p1 && m.player2 === p2) { if (m.score1 > m.score2) w1++; else w2++; }
+    else if (m.player1 === p2 && m.player2 === p1) { if (m.score1 > m.score2) w2++; else w1++; }
+  });
+  if (w1 === 0 && w2 === 0) return null;
+  return { w1, w2 };
+}
+
+// ELO rating system — score-margin weighted, provisional K, per-match deltas
+function calcElo(players, st) {
+  const K_BOX = 32, K_WC = 24, K_OPEN = 16, K_PROV = 48, PROV = 8, BASE = 1000;
+  const ratings = {}, played = {}, deltas = {};
+  players.forEach(p => { ratings[p.id] = BASE; played[p.id] = 0; });
+  const all = [];
+  (st.pastCycles || []).forEach(c => {
+    (c.boxMatches || []).forEach(m => all.push({ ...m, _k: K_BOX }));
+    (c.wildCards || []).forEach(m => all.push({ ...m, _k: K_WC }));
+    (c.openChallenges || []).forEach(m => all.push({ ...m, _k: K_OPEN }));
+  });
+  (st.boxMatches || []).forEach(m => all.push({ ...m, _k: K_BOX }));
+  (st.wildCards || []).forEach(m => all.push({ ...m, _k: K_WC }));
+  (st.openChallenges || []).forEach(m => all.push({ ...m, _k: K_OPEN }));
+  all.filter(m => m.completed && !m.forfeit && (m.score1 + m.score2) > 0 && ratings[m.player1] !== undefined && ratings[m.player2] !== undefined)
+    .sort((a, b) => (a.completedAt || "").localeCompare(b.completedAt || ""))
+    .forEach(m => {
+      const ra = ratings[m.player1], rb = ratings[m.player2];
+      const tot = m.score1 + m.score2;
+      const res1 = m.score1 / tot, res2 = m.score2 / tot;
+      const ea = 1 / (1 + Math.pow(10, (rb - ra) / 400));
+      const ka = played[m.player1] < PROV ? K_PROV : m._k;
+      const kb = played[m.player2] < PROV ? K_PROV : m._k;
+      const da = Math.round(ka * (res1 - ea));
+      const db = Math.round(kb * (res2 - (1 - ea)));
+      ratings[m.player1] += da; ratings[m.player2] += db;
+      played[m.player1]++; played[m.player2]++;
+      deltas[m.id] = { [m.player1]: da, [m.player2]: db };
+    });
+  return { ratings, deltas, played };
+}
+
+// Get monthly champions from past cycles (Box 1 winner)
+function getChampions(st, gn) {
+  const champs = [];
+  (st.pastCycles || []).forEach(c => {
+    if (c.boxes && c.boxes.length > 0 && !c.boxes[0].isSwing) {
+      const box1 = c.boxes[0];
+      const bm = (c.boxMatches || []).filter(m => m.box === 0);
+      if (bm.length > 0 && bm.every(m => m.completed)) {
+        const bs = boxSt(box1.players, bm);
+        if (bs[0]) champs.push({ cycle: c.cycle, id: bs[0].id, name: gn(bs[0].id), date: c.startedAt });
+      }
+    }
+  });
+  // Check current cycle Box 1
+  if (st.boxes && st.boxes.length > 0 && !st.boxes[0].isSwing) {
+    const bm = (st.boxMatches || []).filter(m => m.box === 0);
+    if (bm.length > 0 && bm.every(m => m.completed)) {
+      const bs = boxSt(st.boxes[0].players, bm);
+      if (bs[0]) champs.push({ cycle: st.cycleNumber, id: bs[0].id, name: gn(bs[0].id), date: st.cycleStart, current: true });
+    }
+  }
+  return champs;
+}
+
+
+const PLAYERS = ["Gianna Acitelli","Elvira Aguillon","Koula Angelinas","Jean Marie Apruzzese","Gerard Apruzzese","Frank Banta","Bart Bess","Glen Besser","Sreyansh Biswal","Amanda Bloshuk","Eduardo Bonilla","Jason Borreo","Brad Boyle","Adam Breen","Duncan Brennan","Kenneth Carpenter","Hans Castaneda","Miguel Castro","Karen Chen","Steven Ciardiello","Dan Conlisk","Christopher Cook","Bridget Cooney","Rafael Cordero","Mike Cottam","Nicholas Cresta","Shawn Dacey","Zahra Derrick","James Driscoll","Matthew Farina","Susan Fattorusso","Lucy Ferrantelli","Sandy French","Daniel Giordano","Daniel Goldman","Brett Gottlieb","Korey Grabowski","Daniel Graham","David Gray","Andrew Grider","Max Gustafson","John Haaf","Melissa Haime","Christopher Halloran","William Hankers","Jake Hannah","Lauren Hayes","Anthony Helmandollar","Ian Holland","Hussein Hussein","Robert Hyman","Peter Ibelli","Patrick Judge","Brian Kittner","Sam Klaber","Jared Konigsberg","John Kopans","Werner Kratovil","Jonathan Lea","Jeffrey Lehrman","Christopher Lepore","Wei Lin","Jack Linehan","David Luski","Jason Luski","Shayne Lyons","Sloan Martin","Gabriella Mascellino","Quinn McQuade","Adam Melnick","Mario Minera","Anna Ming","Cristin Mitchell","Melanie Mohr","Indira Negron","Payton Odom","Peter Papadakos","Anjali Pharsi","Regina Poniros","Delaney Reynolds","Stephanie Rivera","Janine Roberts","Maria Rodriguez","Charles Ruotolo","Michelle Santos","Merritt Scott","John Serzan","Tracy Shi","Matt Shore","Tracy Sonnabend","Kim Stirba","Carol Su","Stephen Suriano","Aaron Talan","Amanda Taylor","Anthony Venditti","Ivan Vidal","Hope Wasserman","Andrew Wietstock","Liying Yang","Thomas Yang","Ashley Yip","Michael Yurick"].map(n => ({ id: uid(), name: n, joinedAt: nw() }));
+const DEF = { players: PLAYERS, boxes: [], boxMatches: [], wildCards: [], openChallenges: [], checkedIn: [], pastCycles: [], cycleNumber: 0, cycleStart: null, cycleDurationWeeks: 4, auditLog: [], adminPin: null, announcement: null };
+const withLog = (s, action, details) => { const al = [...(s.auditLog || []), { id: uid(), ts: nw(), action, details }]; return { ...s, auditLog: al.length > 200 ? al.slice(-200) : al }; };
+
+function useCD(cycleStart, weeks) { const [r, setR] = useState({ d: 0, h: 0, m: 0 }); useEffect(() => { const tick = () => { if (!cycleStart) { setR({ d: 0, h: 0, m: 0 }); return; } const end = new Date(new Date(cycleStart).getTime() + (weeks || 4) * 7 * 864e5); const diff = Math.max(0, end.getTime() - Date.now()); setR({ d: Math.floor(diff / 864e5), h: Math.floor((diff % 864e5) / 36e5), m: Math.floor((diff % 36e5) / 6e4) }); }; tick(); const id = setInterval(tick, 6e4); return () => clearInterval(id); }, [cycleStart, weeks]); return r; }
+
+const gc = { background: "rgba(255,255,255,.05)", backdropFilter: "blur(28px) saturate(160%) brightness(1.05)", WebkitBackdropFilter: "blur(28px) saturate(160%) brightness(1.05)", border: "1px solid rgba(255,255,255,.12)", borderTop: "1px solid rgba(255,255,255,.22)", borderRadius: 20, padding: 16, marginBottom: 12, boxShadow: "0 8px 40px rgba(0,0,0,.35), inset 0 1px 0 rgba(255,255,255,.12)", transition: "transform .2s, box-shadow .2s" };
+const gt = { borderRadius: 16, overflow: "hidden", border: "1px solid rgba(255,255,255,.1)", borderTop: "1px solid rgba(255,255,255,.2)", background: "rgba(255,255,255,.04)", backdropFilter: "blur(20px)", WebkitBackdropFilter: "blur(20px)", boxShadow: "0 4px 24px rgba(0,0,0,.25)" };
+const ths = { fontSize: 9, fontWeight: 700, color: P.blue, letterSpacing: 1.5, textTransform: "uppercase" };
+const gth = { padding: "7px 5px", textAlign: "center", fontSize: 9, fontWeight: 700, color: P.blue, background: "rgba(255,255,255,.06)", borderBottom: "1px solid rgba(255,255,255,.08)" };
+const gtd = { padding: "8px 5px", textAlign: "center", fontSize: 12, color: P.off, borderBottom: "1px solid rgba(255,255,255,.05)" };
+const bpS = { display: "block", width: "100%", marginTop: 10, padding: "13px 11px", background: "linear-gradient(135deg,#FF9500,#FFAD33,#F18A00)", color: P.navy, border: "none", borderRadius: 14, fontWeight: 700, fontSize: 13, cursor: "pointer", boxShadow: "0 4px 20px rgba(241,138,0,.4), inset 0 1px 0 rgba(255,255,255,.3)", transition: "transform .15s, box-shadow .15s" };
+const bcS = { display: "block", width: "100%", marginTop: 4, padding: 7, background: "transparent", color: P.grey, border: "none", fontSize: 11, cursor: "pointer" };
+const ssS = { width: "100%", padding: "11px 12px", background: "rgba(255,255,255,.05)", border: "1px solid rgba(255,255,255,.12)", borderRadius: 12, color: P.off, fontSize: 14, marginBottom: 6, transition: "border-color .2s, box-shadow .2s" };
+const inpS = { flex: 1, padding: "11px 14px", background: "rgba(255,255,255,.05)", border: "1px solid rgba(255,255,255,.12)", borderRadius: 12, color: P.off, fontSize: 14, outline: "none", transition: "border-color .2s, box-shadow .2s" };
+
+const DRALogo = () => <img src="https://jluski.github.io/DRA-Pool/logo_white.png" alt="DRA Advisors" style={{ display: "block", margin: "0 auto", width: 160, height: "auto" }} />;
+const Tt = ({ children }) => <h3 style={{ fontSize: 18, fontWeight: 300, color: P.white, marginBottom: 14, fontFamily: "Georgia,serif", letterSpacing: 2 }}>{children}</h3>;
+const Sub = ({ children }) => <h4 style={{ fontSize: 9, fontWeight: 700, color: P.orange, letterSpacing: 3, textTransform: "uppercase", margin: "18px 0 8px" }}>{children}</h4>;
+
+const RankBadge = ({ change }) => {
+  if (change === "new") return <span style={{ fontSize: 8, color: P.blue, fontWeight: 700 }}>NEW</span>;
+  if (change > 0) return <span style={{ fontSize: 10, color: P.ok, fontWeight: 700 }}>{"\u25b2"}{change}</span>;
+  if (change < 0) return <span style={{ fontSize: 10, color: P.bad, fontWeight: 700 }}>{"\u25bc"}{Math.abs(change)}</span>;
+  return <span style={{ fontSize: 10, color: P.dim }}>{"\u2014"}</span>;
+};
+const StreakBadge = ({ streak }) => {
+  if (streak < 3) return null;
+  return <span style={{ fontSize: 10, marginLeft: 4 }}>{"\ud83d\udd25"}{streak}</span>;
+};
+const SPECTATOR = new URLSearchParams(window.location.search).get("mode") === "spectator";
+
+function App() {
+  const [st, setSt] = useState(null);
+  const [view, setView] = useState("home");
+  const [toast, setToast] = useState(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [navIdx, setNavIdx] = useState(0);
+  const [tappedTab, setTappedTab] = useState(null);
+  const [dbError, setDbError] = useState(null);
+  const [showQR, setShowQR] = useState(false);
+  const [checkInFocus, setCheckInFocus] = useState(false);
+  const touchStartY = React.useRef(0);
+
+  const flash = (m) => { setToast(m); setTimeout(() => setToast(null), 2800); };
+  useEffect(() => {
+    const unsub = DOC_REF.onSnapshot(
+      (doc) => { setDbError(null); if (doc.exists) setSt(doc.data()); else DOC_REF.set(DEF).then(() => setSt(DEF)).catch(e => { console.error(e); setDbError(e.message); setSt(DEF); }); },
+      (error) => { console.error("Firestore:", error); setDbError(error.message); setSt(prev => prev || DEF); }
+    );
+    return () => unsub();
+  }, []);
+  const saveTimer = React.useRef(null);
+  const save = useCallback((s) => { const prev = st; setSt(s); if (saveTimer.current) clearTimeout(saveTimer.current); saveTimer.current = setTimeout(async () => { try { await DOC_REF.set(s); } catch (e) { console.error("Save failed:", e); setSt(prev); flash("Save failed — check connection"); } }, 300); }, [st]);
+  const forceRefresh = useCallback(() => { setRefreshing(true); DOC_REF.get().then(doc => { if (doc.exists) setSt(doc.data()); }).catch(() => {}).finally(() => setRefreshing(false)); }, []);
+  const onTouchStart = (e) => { touchStartY.current = e.touches[0].clientY; };
+  const onTouchEnd = (e) => { if (e.changedTouches[0].clientY - touchStartY.current > 70 && window.scrollY === 0) forceRefresh(); };
+  const cd = useCD(st?.cycleStart, st?.cycleDurationWeeks);
+  const ladder = useMemo(() => st ? calcLad(st.players, st) : [], [st]);
+  const activeIds = st ? new Set([...(st.boxes || []).flatMap(b => b.players), ...(st.openChallenges || []).filter(m => m.completed).flatMap(m => [m.player1, m.player2]), ...(st.boxMatches || []).filter(m => m.completed).flatMap(m => [m.player1, m.player2]), ...(st.wildCards || []).filter(m => m.completed).flatMap(m => [m.player1, m.player2])]) : new Set();
+  const activeLad = ladder.filter(s => activeIds.has(s.id));
+  const gn = (id) => { if (!st) return "?"; const p = st.players.find(x => x.id === id); return p ? p.name : "?"; };
+  const ini = (id) => gn(id).split(" ").map(w => w[0]).join("").toUpperCase().slice(0, 3);
+  if (!st) return <div style={{ background: P.navy, minHeight: "100vh", padding: "60px 14px" }}>
+    <style>{"@keyframes spin{to{transform:rotate(360deg)}} @keyframes shimmerLoad{0%{background-position:200% center}100%{background-position:-200% center}}"}</style>
+    <div style={{ maxWidth: 600, margin: "0 auto" }}>
+      <div style={{ ...gc, height: 80, background: "linear-gradient(90deg, rgba(255,255,255,.03) 25%, rgba(255,255,255,.08) 50%, rgba(255,255,255,.03) 75%)", backgroundSize: "200% 100%", animation: "shimmerLoad 1.5s infinite" }} />
+      {[1,2,3,4,5].map(i => <div key={i} style={{ ...gc, height: 44, marginBottom: 6, background: "linear-gradient(90deg, rgba(255,255,255,.03) 25%, rgba(255,255,255,.08) 50%, rgba(255,255,255,.03) 75%)", backgroundSize: "200% 100%", animation: "shimmerLoad 1.5s infinite", animationDelay: i * 0.1 + "s" }} />)}
+      <div style={{ textAlign: "center", marginTop: 20 }}><div style={{ width: 24, height: 24, border: "2px solid " + P.mid, borderTop: "2px solid " + P.orange, borderRadius: "50%", animation: "spin .7s linear infinite", display: "inline-block" }} /></div>
+    </div>
+  </div>;
+
+  const addP = (n) => { if (!n.trim() || st.players.find(p => p.name.toLowerCase() === n.trim().toLowerCase())) { flash("Invalid/duplicate"); return; } const np = { id: uid(), name: n.trim(), joinedAt: nw() }; save(withLog({ ...st, players: [...st.players, np] }, "PLAYER_ADDED", n.trim())); flash(n.trim() + " joined!"); };
+  const rmP = (id) => { const nm = (st.players.find(p => p.id === id) || {}).name || id; const ns = { ...st, players: st.players.filter(p => p.id !== id), checkedIn: st.checkedIn.filter(c => c !== id), boxMatches: (st.boxMatches || []).map(m => (m.player1 === id || m.player2 === id) && !m.completed ? { ...m, score1: 0, score2: 0, completed: true, completedAt: nw(), forfeit: true } : m), wildCards: (st.wildCards || []).map(m => (m.player1 === id || m.player2 === id) && !m.completed ? { ...m, score1: 0, score2: 0, completed: true, completedAt: nw(), forfeit: true } : m), openChallenges: (st.openChallenges || []).map(m => (m.player1 === id || m.player2 === id) && !m.completed ? { ...m, score1: 0, score2: 0, completed: true, completedAt: nw(), forfeit: true } : m) }; save(withLog(ns, "PLAYER_REMOVED", nm)); flash("Removed"); };
+  const togCI = (id) => { if (!st.players.some(p => p.id === id)) return; const checked = st.checkedIn.includes(id); save(withLog({ ...st, checkedIn: checked ? st.checkedIn.filter(c => c !== id) : [...st.checkedIn, id] }, "CHECKIN_TOGGLED", gn(id))); };
+  const selLast = () => { if (!st.pastCycles.length) { flash("No previous round"); return; } const lastC = st.pastCycles[st.pastCycles.length - 1]; const allM = [...(lastC.boxMatches || []), ...(lastC.wildCards || []), ...(lastC.openChallenges || [])].filter(m => m.completed && !m.forfeit && !(m.score1 === 0 && m.score2 === 0)); const ids = [...new Set(allM.flatMap(m => [m.player1, m.player2]))].filter(id => st.players.some(p => p.id === id)); if (!ids.length) { flash("No previous round"); return; } save(withLog({ ...st, checkedIn: ids }, "CHECKIN_AUTO_SELECT", ids.length + " players")); flash(ids.length + " from last round!"); };
+  const completeCyc = () => {
+    const bon = [];
+    if (st.boxes) st.boxes.forEach((box, bi) => { const bm = (st.boxMatches || []).filter(m => m.box === bi); const realBM = bm.filter(m => m.completed && !m.forfeit && !(m.score1 === 0 && m.score2 === 0)); if (realBM.length > 0 && bm.every(m => m.completed)) { const bs = boxSt(box.players, realBM); if (bs[0]) bon.push({ id: bs[0].id, pts: 3 }); if (bs[1]) bon.push({ id: bs[1].id, pts: 1 }); } });
+    const past = st.cycleNumber > 0 ? [...st.pastCycles, { cycle: st.cycleNumber, boxMatches: st.boxMatches || [], wildCards: st.wildCards || [], openChallenges: st.openChallenges || [], boxes: st.boxes || [], bonuses: [...bon], startedAt: st.cycleStart, randomized: st.cycleRandomized || false }] : st.pastCycles;
+    save(withLog({ ...st, pastCycles: past, boxes: [], boxMatches: [], wildCards: [], openChallenges: [] }, "CYCLE_COMPLETED", "Round " + st.cycleNumber));
+    flash("Round " + st.cycleNumber + " complete!");
+  };
+  const endEarlyCyc = () => {
+    const bon = [];
+    const afBM = (st.boxMatches || []).map(m => !m.completed ? { ...m, score1: 0, score2: 0, completed: true, completedAt: nw(), forfeit: true, autoForfeit: true } : m);
+    const afWC = (st.wildCards || []).map(m => !m.completed ? { ...m, score1: 0, score2: 0, completed: true, completedAt: nw(), forfeit: true, autoForfeit: true } : m);
+    if (st.boxes) st.boxes.forEach((box, bi) => { const bm = afBM.filter(m => m.box === bi); const realBM = bm.filter(m => m.completed && !m.forfeit && !(m.score1 === 0 && m.score2 === 0)); if (realBM.length > 0) { const bs = boxSt(box.players, realBM); if (bs[0]) bon.push({ id: bs[0].id, pts: 3 }); if (bs[1]) bon.push({ id: bs[1].id, pts: 1 }); } });
+    const past = [...st.pastCycles, { cycle: st.cycleNumber, boxMatches: afBM, wildCards: afWC, openChallenges: st.openChallenges || [], boxes: st.boxes || [], bonuses: [...bon], startedAt: st.cycleStart, randomized: st.cycleRandomized || false }];
+    save(withLog({ ...st, pastCycles: past, boxes: [], boxMatches: [], wildCards: [], openChallenges: [] }, "CYCLE_ENDED_EARLY", "Round " + st.cycleNumber));
+    flash("Round " + st.cycleNumber + " ended.");
+  };
+  // Build the archive object for the current round (dry-run, no save)
+  const buildArchive = () => {
+    if (st.cycleNumber > 0 && (st.boxes || []).length > 0) {
+      const bon = [];
+      const afBM = (st.boxMatches || []).map(m => !m.completed ? { ...m, score1: 0, score2: 0, completed: true, completedAt: nw(), forfeit: true, autoForfeit: true } : m);
+      const afWC = (st.wildCards || []).map(m => !m.completed ? { ...m, score1: 0, score2: 0, completed: true, completedAt: nw(), forfeit: true, autoForfeit: true } : m);
+      if (st.boxes) st.boxes.forEach((box, bi) => { const bm = afBM.filter(m => m.box === bi); const realBM = bm.filter(m => m.completed && !m.forfeit && !(m.score1 === 0 && m.score2 === 0)); if (realBM.length > 0) { const bs = boxSt(box.players, realBM); if (bs[0]) bon.push({ id: bs[0].id, pts: 3 }); if (bs[1]) bon.push({ id: bs[1].id, pts: 1 }); } });
+      return [...st.pastCycles, { cycle: st.cycleNumber, boxMatches: afBM, wildCards: afWC, openChallenges: st.openChallenges || [], boxes: st.boxes || [], bonuses: [...bon], startedAt: st.cycleStart, randomized: st.cycleRandomized || false }];
+    }
+    return st.pastCycles;
+  };
+  // Compute seeded boxes for admin preview — does NOT write to Firestore
+  const previewCyc = (randomize = false) => {
+    if (st.checkedIn.length < 4) { flash("Need 4+"); return null; }
+    if (st.cycleNumber > 0 && (st.boxes || []).length > 0) { flash("Round already in progress"); return null; }
+    const past = buildArchive();
+    const nl = calcLad(st.players, { ...st, pastCycles: past, boxMatches: [], wildCards: [], openChallenges: [], boxes: [] });
+    const lastSeeded = [...past].reverse().find(c => !c.randomized);
+    let adjustedNl = nl;
+    const adj = {};
+    let eloResult = null; let eloFrac = {};
+    if (!randomize && lastSeeded) {
+      const numBoxes = lastSeeded.boxes.length;
+      lastSeeded.boxes.forEach((box, bi) => {
+        const bm = (lastSeeded.boxMatches || []).filter(m => m.box === bi);
+        // Only real (non-forfeit, non-zero) matches count; threshold scales with box size
+        const realMatches = bm.filter(m => m.completed && !m.forfeit && !(m.score1 === 0 && m.score2 === 0));
+        const threshold = Math.ceil(box.players.length / 2);
+        if (realMatches.length < threshold) return;
+        const standing = boxSt(box.players, realMatches);
+        if (!standing.length) return;
+        if (bi > 0 && standing[0]) adj[standing[0].id] = -4;
+        if (bi < numBoxes - 1 && standing[standing.length - 1]) adj[standing[standing.length - 1].id] = +4;
+      });
+      // Build last round's seed position map — the base for movement guarantees exactly ±1 box
+      const lastSeedPos = {}; let _pos = 0;
+      lastSeeded.boxes.forEach(box => { box.players.forEach(pid => { lastSeedPos[pid] = _pos++; }); });
+      // ELO as fractional tiebreaker [0, 0.99] — never independently crosses a box boundary
+      const ELO_MIN = 3;
+      eloResult = calcElo(st.players, { ...st, pastCycles: past, boxMatches: [], wildCards: [], openChallenges: [] });
+      const qualIds = st.checkedIn.filter(id => lastSeedPos[id] !== undefined && (eloResult.played[id] || 0) >= ELO_MIN);
+      const qualRatings = qualIds.map(id => eloResult.ratings[id] || 1000);
+      const eloMin = qualRatings.length > 1 ? Math.min(...qualRatings) : 1000;
+      const eloMax = qualRatings.length > 1 ? Math.max(...qualRatings) : 1000;
+      const eloRange = eloMax - eloMin;
+      st.checkedIn.forEach(id => {
+        if (lastSeedPos[id] === undefined || (eloResult.played[id] || 0) < ELO_MIN || eloRange === 0) { eloFrac[id] = 0; return; }
+        const norm = ((eloResult.ratings[id] || 1000) - eloMin) / eloRange; // 1.0 = highest ELO
+        eloFrac[id] = (1 - norm) * 0.99; // 0.0 = best ELO seed, 0.99 = worst
+      });
+      adjustedNl = nl
+        .map((p, i) => ({
+          ...p,
+          _seed: lastSeedPos[p.id] !== undefined
+            ? lastSeedPos[p.id] + (adj[p.id] || 0) + (eloFrac[p.id] || 0)
+            : 9999 + i // Absent/new players go to Swing Box
+        }))
+        .sort((a, b) => a._seed - b._seed);
+    }
+    // Build per-player seeding reason for admin preview UI
+    const playerReasons = {};
+    if (!randomize && lastSeeded) {
+      const checkedInSet = new Set(st.checkedIn);
+      lastSeeded.boxes.forEach((box, bi) => {
+        const bm = (lastSeeded.boxMatches || []).filter(m => m.box === bi);
+        const realBM = bm.filter(m => m.completed && !m.forfeit && !(m.score1 === 0 && m.score2 === 0));
+        const standing = realBM.length ? boxSt(box.players, realBM) : null;
+        box.players.forEach(pid => {
+          if (!checkedInSet.has(pid)) return;
+          const stEntry = standing ? standing.find(s => s.id === pid) : null;
+          const adjVal = adj[pid] || 0;
+          playerReasons[pid] = {
+            fromBox: bi + 1,
+            reason: adjVal < 0 ? "promoted" : adjVal > 0 ? "relegated" : "held",
+            lastRecord: stEntry ? stEntry.w + "W " + stEntry.l + "L" : null,
+          };
+        });
+      });
+      st.checkedIn.forEach(pid => {
+        if (playerReasons[pid]) return;
+        const everPlayed = past.some(c => [...(c.boxMatches || []), ...(c.wildCards || [])].some(m => m.player1 === pid || m.player2 === pid));
+        playerReasons[pid] = { reason: everPlayed ? "returning" : "new", fromBox: null, lastRecord: null };
+      });
+    }
+    return { randomize, suggestedBoxes: buildBoxes(st.checkedIn, adjustedNl, randomize), playerReasons, eloRatings: eloResult ? eloResult.ratings : {}, eloPlayed: eloResult ? eloResult.played : {}, eloFrac };
+  };
+  // Confirm: save admin-approved (possibly adjusted) boxes to Firestore
+  const confirmCyc = (finalBoxes, randomize, movedIds) => {
+    const past = buildArchive();
+    const stampedBoxes = finalBoxes.map(box => ({ ...box, manuallyPlaced: box.players.filter(id => movedIds.has(id)) }));
+    const bm = genBM(stampedBoxes); const wc = genWC(stampedBoxes);
+    const ns = { ...st, pastCycles: past, boxes: stampedBoxes, boxMatches: bm, wildCards: wc, openChallenges: [], checkedIn: [], cycleStart: nw(), cycleNumber: st.cycleNumber + 1, cycleRandomized: randomize };
+    save(withLog(ns, "CYCLE_STARTED", "Round " + (st.cycleNumber + 1)));
+    flash("Round " + (st.cycleNumber + 1) + " started!");
+  };
+  const undoCyc = () => { if (st.cycleNumber < 1) return; const prev = st.pastCycles[st.pastCycles.length - 1]; const restore = arr => (arr || []).map(m => m.autoForfeit ? { ...m, score1: null, score2: null, completed: false, completedAt: null, forfeit: false, autoForfeit: false } : m); const base = prev ? { ...st, pastCycles: st.pastCycles.slice(0, -1), boxes: prev.boxes || [], boxMatches: restore(prev.boxMatches), wildCards: restore(prev.wildCards), openChallenges: prev.openChallenges || [], checkedIn: [], cycleStart: prev.startedAt, cycleNumber: st.cycleNumber - 1 } : { ...st, boxes: [], boxMatches: [], wildCards: [], openChallenges: [], checkedIn: [], cycleStart: null, cycleNumber: 0 }; save(withLog(base, "CYCLE_UNDONE", "Round " + st.cycleNumber)); flash("Undone!"); };
+  const logR = (id, s1, s2, list) => { if (typeof s1 !== "number" || typeof s2 !== "number" || s1 < 0 || s2 < 0 || s1 > 2 || s2 > 2 || (s1 !== 2 && s2 !== 2) || s1 === s2) { flash("Invalid score"); return; } const m = st[list].find(x => x.id === id); const det = m ? gn(m.player1) + " " + s1 + "-" + s2 + " " + gn(m.player2) : id; const playerIds = new Set(st.players.map(p => p.id)); const newCI = m ? [...new Set([...st.checkedIn, m.player1, m.player2])].filter(id => playerIds.has(id)) : st.checkedIn; save(withLog({ ...st, [list]: st[list].map(m => m.id === id ? { ...m, score1: s1, score2: s2, completed: true, completedAt: nw(), forfeit: false } : m), checkedIn: newCI }, "MATCH_RECORDED", det)); flash(m ? gn(m.player1) + " " + s1 + "–" + s2 + " " + gn(m.player2) : "Recorded!"); };
+  const ffM = (id, list) => { const m = st[list].find(x => x.id === id); const det = m ? gn(m.player1) + " vs " + gn(m.player2) : id; save(withLog({ ...st, [list]: st[list].map(m => m.id === id ? { ...m, score1: 0, score2: 0, completed: true, completedAt: nw(), forfeit: true } : m) }, "MATCH_FORFEIT", det)); flash(m ? gn(m.player1) + " vs " + gn(m.player2) + " — not played" : "Not played"); };
+  const newOC = (p1, p2) => { if (p1 === p2) { flash("Same player!"); return; } if ((st.openChallenges || []).find(m => !m.completed && ((m.player1 === p1 && m.player2 === p2) || (m.player1 === p2 && m.player2 === p1)))) { flash("Challenge already pending!"); return; } const oc = { id: uid(), type: "open", player1: p1, player2: p2, score1: null, score2: null, completed: false, completedAt: null }; save(withLog({ ...st, openChallenges: [...st.openChallenges, oc] }, "CHALLENGE_CREATED", gn(p1) + " vs " + gn(p2))); flash("Challenge created!"); };
+  const resetAll = () => { save(DEF); flash("Reset!"); setView("home"); };
+
+  const tabs = SPECTATOR
+    ? [["home", "\ud83c\udfc6"], ["boxes", "\ud83d\udcca"], ["matches", "\ud83c\udfb1"], ["rules", "\ud83d\udcd6"]]
+    : [["home", "\ud83c\udfc6"], ["boxes", "\ud83d\udcca"], ["matches", "\ud83c\udfb1"], ["challenge", "\u2694\ufe0f"], ["checkin", "\u2705"], ["rules", "\ud83d\udcd6"]];
+
+  return (
+    <div onTouchStart={onTouchStart} onTouchEnd={onTouchEnd} style={{ minHeight: "100vh", background: P.navy, color: P.off, fontFamily: "'DM Sans',Helvetica,sans-serif" }}>
+      <style>{`
+        @keyframes spin{to{transform:rotate(360deg)}}
+        @keyframes fadeIn{from{opacity:0}to{opacity:1}}
+        @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+        @keyframes slideT{from{opacity:0;transform:translate(-50%,-12px)}to{opacity:1;transform:translate(-50%,0)}}
+        @keyframes slideDown{from{opacity:0;transform:translateY(-8px)}to{opacity:1;transform:translateY(0)}}
+        @keyframes orbFloat1{0%,100%{transform:translate(0,0)}50%{transform:translate(-30px,25px)}}
+        @keyframes orbFloat2{0%,100%{transform:translate(0,0)}50%{transform:translate(25px,-20px)}}
+        @keyframes orbFloat3{0%,100%{transform:translate(0,0)}50%{transform:translate(-20px,30px)}}
+        @keyframes navBounce{0%{transform:scale(1) translateY(0)}30%{transform:scale(1.35) translateY(-5px)}60%{transform:scale(.95) translateY(1px)}100%{transform:scale(1) translateY(0)}}
+        @keyframes glowBurst{0%{opacity:.7;transform:translate(-50%,-50%) scale(.4)}100%{opacity:0;transform:translate(-50%,-50%) scale(2.2)}}
+        @keyframes shimmer{0%{background-position:200% center}100%{background-position:-200% center}}
+        button:active{transform:scale(.97)}
+        input:focus,select:focus{outline:none!important;border-color:rgba(21,152,203,.7)!important;box-shadow:0 0 0 3px rgba(21,152,203,.2)!important}
+        select option{background:${P.navy};color:${P.off}}
+      `}</style>
+      {toast && <div style={{ position: "fixed", top: 12, left: "50%", transform: "translateX(-50%)", zIndex: 100, background: "linear-gradient(135deg," + P.orange + "," + P.amber + ")", color: P.navy, padding: "9px 22px", borderRadius: 12, fontSize: 12, fontWeight: 700, animation: "slideT .25s ease-out", whiteSpace: "nowrap" }}>{toast}</div>}
+      {dbError && <div style={{ position: "fixed", top: 0, left: 0, right: 0, zIndex: 98, background: "rgba(248,113,113,.15)", borderBottom: "1px solid rgba(248,113,113,.3)", padding: "6px 16px", fontSize: 11, color: P.bad, textAlign: "center" }}>⚠️ Firebase: {dbError} — <span onClick={() => window.location.reload()} style={{ textDecoration: "underline", cursor: "pointer" }}>retry</span></div>}
+      {refreshing && <div style={{ position: "fixed", top: 0, left: "50%", transform: "translateX(-50%)", zIndex: 99, background: "rgba(255,255,255,.08)", backdropFilter: "blur(20px)", borderRadius: "0 0 12px 12px", padding: "6px 18px", fontSize: 11, color: P.blue, fontWeight: 700, border: "1px solid rgba(255,255,255,.15)", borderTop: "none" }}>Refreshing…</div>}
+      <div style={{ position: "fixed", inset: 0, overflow: "hidden", pointerEvents: "none", zIndex: 0 }}>
+        <div style={{ position: "absolute", width: 500, height: 500, borderRadius: "50%", background: "radial-gradient(circle, rgba(21,152,203,.18) 0%, transparent 65%)", top: "-150px", right: "-150px", animation: "orbFloat1 12s ease-in-out infinite" }} />
+        <div style={{ position: "absolute", width: 400, height: 400, borderRadius: "50%", background: "radial-gradient(circle, rgba(241,138,0,.12) 0%, transparent 65%)", bottom: "80px", left: "-100px", animation: "orbFloat2 15s ease-in-out infinite" }} />
+        <div style={{ position: "absolute", width: 300, height: 300, borderRadius: "50%", background: "radial-gradient(circle, rgba(0,200,180,.08) 0%, transparent 65%)", bottom: "-80px", right: "20%", animation: "orbFloat3 10s ease-in-out infinite" }} />
+      </div>
+      <div style={{ position: "sticky", top: 0, zIndex: 8, background: "rgba(255,255,255,.06)", backdropFilter: "blur(20px) saturate(150%)", WebkitBackdropFilter: "blur(20px) saturate(150%)", borderBottom: "1px solid rgba(255,255,255,.12)", boxShadow: "0 2px 20px rgba(0,0,0,.2), inset 0 1px 0 rgba(255,255,255,.15)", display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 18px", animation: "slideDown .2s ease-out" }}>
+        {st.cycleStart ? <span style={{ fontSize: 11, fontWeight: 700, color: P.orange }}>Round {st.cycleNumber}</span> : <span style={{ fontSize: 11, color: P.dim }}>DRA Pool</span>}
+        {st.cycleStart ? <span style={{ fontSize: 11, color: P.off }}>{cd.d}d {cd.h}h {cd.m}m left</span> : <span />}
+        <div style={{ display: "flex", alignItems: "center", gap: 2 }}>
+          <button onClick={forceRefresh} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 16, padding: "2px 4px", opacity: .45, lineHeight: 1, transition: "transform .3s", transform: refreshing ? "rotate(360deg)" : "none" }}>↻</button>
+          <button onClick={() => setShowQR(true)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 18, padding: "2px 4px", opacity: .45, lineHeight: 1 }}>📷</button>
+          {!SPECTATOR && <button onClick={() => { setView("admin"); setNavIdx(-1); }} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 18, padding: "2px 4px", opacity: .45, lineHeight: 1 }}>🔒</button>}
+        </div>
+      </div>
+      {showQR && (
+        <div onClick={() => setShowQR(false)} style={{ position: "fixed", inset: 0, zIndex: 100, background: "rgba(0,10,20,.96)", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 20, animation: "fadeIn .2s" }}>
+          <p style={{ fontSize: 13, fontWeight: 700, color: P.orange, letterSpacing: 3, textTransform: "uppercase" }}>Join the League</p>
+          <div style={{ background: "#fff", borderRadius: 16, padding: 16 }}>
+            <img src={"https://api.qrserver.com/v1/create-qr-code/?size=260x260&data=" + encodeURIComponent(window.location.href)} width={260} height={260} alt="QR Code" style={{ display: "block", borderRadius: 4 }} />
+          </div>
+          <p style={{ fontSize: 11, color: P.dim }}>Tap anywhere to close</p>
+        </div>
+      )}
+      <main style={{ maxWidth: 600, margin: "0 auto", padding: "0 14px 110px", animation: "fadeIn .3s", position: "relative", zIndex: 1 }}>
+        {view === "home" && <Home st={st} ladder={activeLad} gn={gn} ini={ini} cd={cd} onJoin={() => { setView("checkin"); setNavIdx(4); setCheckInFocus(true); }} />}
+        {view === "boxes" && <BoxesV st={st} gn={gn} ini={ini} logR={logR} ffM={ffM} />}
+        {view === "matches" && <MatchesV st={st} gn={gn} logR={logR} ffM={ffM} />}
+        {view === "challenge" && <ChallengeV players={st.players} newOC={newOC} />}
+        {view === "checkin" && <CheckInV st={st} ladder={ladder} togCI={togCI} selLast={selLast} autoOpen={checkInFocus} onAutoOpenDone={() => setCheckInFocus(false)} />}
+        {view === "rules" && <RulesV />}
+        {view === "admin" && <AdminV st={st} ladder={ladder} previewCyc={previewCyc} confirmCyc={confirmCyc} completeCyc={completeCyc} endEarlyCyc={endEarlyCyc} undoCyc={undoCyc} resetAll={resetAll} addP={addP} rmP={rmP} ffM={ffM} gn={gn} save={save} togCI={togCI} />}
+      </main>
+      <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 10, padding: "0 14px", paddingBottom: "max(10px, env(safe-area-inset-bottom))" }}>
+        <nav style={{ display: "flex", justifyContent: "space-around", alignItems: "center", padding: "6px 4px", background: "rgba(255,255,255,.08)", backdropFilter: "blur(40px) saturate(200%)", WebkitBackdropFilter: "blur(40px) saturate(200%)", borderRadius: 28, border: "1px solid rgba(255,255,255,.18)", borderTop: "1px solid rgba(255,255,255,.28)", boxShadow: "0 8px 40px rgba(0,0,0,.4), inset 0 1px 0 rgba(255,255,255,.18)", position: "relative", marginBottom: 8, overflow: "hidden" }}>
+          <div style={{ position: "absolute", left: `calc(${navIdx} * (100% / 6) + 3px)`, width: "calc(100% / 6 - 6px)", top: 4, bottom: 4, borderRadius: 22, background: "rgba(255,255,255,.13)", border: "1px solid rgba(255,255,255,.22)", boxShadow: "inset 0 1px 0 rgba(255,255,255,.3)", transition: "left .28s cubic-bezier(.34,1.56,.64,1)", pointerEvents: "none" }} />
+          {tabs.map(([v, ic], i) => {
+            const label = v === "checkin" ? "Players" : v === "rules" ? "Rules" : v;
+            const isActive = view === v;
+            const isTapped = tappedTab === i;
+            return (
+              <button key={v} onClick={() => { setView(v); setNavIdx(i); setTappedTab(i); setTimeout(() => setTappedTab(null), 420); }} style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "6px 4px 5px", background: "none", border: "none", cursor: "pointer", position: "relative", flex: 1, minHeight: 52 }}>
+                {isTapped && <span style={{ position: "absolute", top: "50%", left: "50%", width: 36, height: 36, borderRadius: "50%", background: "radial-gradient(circle, rgba(241,138,0,.5) 0%, transparent 70%)", animation: "glowBurst .42s ease-out forwards", pointerEvents: "none" }} />}
+                <span style={{ fontSize: isActive ? 22 : 19, lineHeight: 1, animation: isTapped ? "navBounce .42s cubic-bezier(.34,1.56,.64,1)" : "none", display: "block" }}>{ic}</span>
+                {isActive && <span style={{ fontSize: 8, fontWeight: 700, letterSpacing: .8, textTransform: "uppercase", color: P.orange, marginTop: 2, animation: "fadeIn .2s" }}>{label}</span>}
+              </button>
+            );
+          })}
+        </nav>
+      </div>
+    </div>
+  );
+}
+
+// ─── PLAYER PROFILE CARD ─────────────────────────────────────
+function PlayerCard({ pid, st, ladder, gn, eloData, getPlayerHistory, onClose }) {
+  const h2hMap = useMemo(() => buildH2HMap(st), [st]);
+  const pName = gn(pid);
+  const stats = ladder.find(s => s.id === pid) || {};
+  const totalM = (stats.wins || 0) + (stats.losses || 0);
+  const winPct = totalM ? (((stats.wins || 0) / totalM) * 100).toFixed(1) : "0.0";
+  const elo = eloData.ratings[pid] || 1000;
+  const played = eloData.played[pid] || 0;
+  const boxHist = useMemo(() => {
+    const h = [];
+    (st.pastCycles || []).forEach(c => { const box = (c.boxes || []).find(b => b.players.includes(pid)); if (box) h.push({ round: c.cycle, box: box.name }); });
+    if (st.boxes) { const box = st.boxes.find(b => b.players.includes(pid)); if (box) h.push({ round: st.cycleNumber, box: box.name }); }
+    return h;
+  }, [st, pid]);
+  const topH2H = useMemo(() => {
+    const opp = {};
+    const all = [...(st.boxMatches || []), ...(st.wildCards || []), ...(st.openChallenges || [])];
+    (st.pastCycles || []).forEach(c => { [...(c.boxMatches || []), ...(c.wildCards || []), ...(c.openChallenges || [])].forEach(m => all.push(m)); });
+    all.filter(m => m.completed && !m.forfeit && !(m.score1 === 0 && m.score2 === 0) && (m.player1 === pid || m.player2 === pid)).forEach(m => {
+      const oid = m.player1 === pid ? m.player2 : m.player1; opp[oid] = (opp[oid] || 0) + 1;
+    });
+    return Object.entries(opp).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([oid]) => {
+      const r = h2hMap[pid + ":" + oid] || { w1: 0, w2: 0 }; return { name: gn(oid), w: r.w1, l: r.w2 };
+    });
+  }, [st, pid, h2hMap, gn]);
+  const hist = getPlayerHistory(pid).slice(0, 5);
+  const streak = stats.streak || 0;
+  const ov = { position: "fixed", inset: 0, zIndex: 9999, background: "rgba(0,10,20,.82)", backdropFilter: "blur(6px)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16 };
+  const card = { ...gc, maxWidth: 380, width: "100%", padding: 20, position: "relative", color: P.off, fontFamily: "DM Sans, sans-serif", maxHeight: "85vh", overflowY: "auto" };
+  const sec = { fontSize: 10, fontWeight: 700, color: P.dim, textTransform: "uppercase", letterSpacing: 1.2, marginTop: 12, marginBottom: 4 };
+  return React.createElement("div", { style: ov, onClick: onClose },
+    React.createElement("div", { style: card, onClick: e => e.stopPropagation() },
+      React.createElement("div", { onClick: onClose, style: { position: "absolute", top: 10, right: 14, cursor: "pointer", color: P.dim, fontSize: 20, fontWeight: 700 } }, "\u00d7"),
+      React.createElement("div", { style: { fontSize: 22, fontWeight: 700, color: P.white, marginBottom: 4 } }, pName),
+      React.createElement("div", { style: { fontSize: 13, color: P.grey, marginBottom: 2 } },
+        React.createElement("span", { style: { color: P.ok } }, stats.wins || 0), "-",
+        React.createElement("span", { style: { color: P.bad } }, stats.losses || 0), "  (" + winPct + "%)"),
+      played >= 3 && React.createElement("div", { style: { fontSize: 13, color: P.blue, fontWeight: 600, marginBottom: 2 } }, "ELO: " + elo),
+      streak >= 3 && React.createElement("div", { style: { fontSize: 12, color: P.ok, fontWeight: 600 } }, "\uD83D\uDD25 " + streak + " win streak"),
+      boxHist.length > 0 && React.createElement(React.Fragment, null,
+        React.createElement("div", { style: sec }, "Box History"),
+        React.createElement("div", { style: { display: "flex", gap: 6, flexWrap: "wrap" } },
+          boxHist.map((b, i) => React.createElement("span", { key: i, style: { fontSize: 11, padding: "2px 8px", borderRadius: 8, background: P.glass, border: "1px solid " + P.gb, color: P.off } }, "R" + b.round + ": " + b.box)))),
+      topH2H.length > 0 && React.createElement(React.Fragment, null,
+        React.createElement("div", { style: sec }, "Head to Head"),
+        topH2H.map((h, i) => React.createElement("div", { key: i, style: { fontSize: 12, marginBottom: 2 } },
+          React.createElement("span", { style: { color: P.off } }, h.name + " "),
+          React.createElement("span", { style: { color: h.w >= h.l ? P.ok : P.bad, fontWeight: 600 } }, h.w + "-" + h.l)))),
+      hist.length > 0 && React.createElement(React.Fragment, null,
+        React.createElement("div", { style: sec }, "Last " + hist.length + " Matches"),
+        hist.map((m, i) => React.createElement("div", { key: i, style: { fontSize: 11, marginBottom: 2, color: m.won ? P.ok : P.bad } },
+          (m.won ? "W" : "L") + " " + m.myScore + "-" + m.oppScore + " vs " + m.oppName + " (" + m.typeLabel + ")")))
+    )
+  );
+}
+
+// ─── HOME ────────────────────────────────────────────────────
+function Home({ st, ladder, gn, ini, cd, onJoin }) {
+  const [exp, setExp] = useState(null);
+  const [profileId, setProfileId] = useState(null);
+  const [tieExplain, setTieExplain] = useState(null);
+  const explainTie = (a, b) => {
+    if (a.points !== b.points) return null;
+    const h2h = getH2H(a.id, b.id, st);
+    if (h2h && h2h.w1 !== h2h.w2) return gn(a.id) + " leads H2H " + h2h.w1 + "-" + h2h.w2;
+    if (a.wins !== b.wins) return gn(a.id) + " has more wins (" + a.wins + " vs " + b.wins + ")";
+    if (a.rw !== b.rw) return gn(a.id) + " has more racks won (" + a.rw + " vs " + b.rw + ")";
+    return "Tied on all tiebreakers";
+  };
+  const [activeOnly, setActiveOnly] = useState(false);
+  const [showChampHistory, setShowChampHistory] = useState(false);
+  const displayLad = ladder.filter(s => s.mp > 0 && (activeOnly ? !s.inactive : true));
+  const eloData = useMemo(() => calcElo(st.players, st), [st]);
+  const prevElo = useMemo(() => { const prevSt = { ...st, boxMatches: [], wildCards: [], openChallenges: [] }; return calcElo(st.players, prevSt); }, [st]);
+  const ELO_MIN = 3;
+  const eloRanked = [...st.players].filter(p => (eloData.played[p.id] || 0) >= ELO_MIN).sort((a, b) => (eloData.ratings[b.id] || 1000) - (eloData.ratings[a.id] || 1000));
+  const eloRank = {}; eloRanked.forEach((p, i) => { eloRank[p.id] = i + 1; });
+  const last5 = (st.openChallenges || []).filter(m => m.completed).slice(-5).reverse();
+  const getS = (bm, p1, p2) => { const m = bm.find(m => (m.player1 === p1 && m.player2 === p2) || (m.player1 === p2 && m.player2 === p1)); if (!m) return null; if (!m.completed) return { pending: true }; return { s1: m.player1 === p1 ? m.score1 : m.score2, s2: m.player1 === p1 ? m.score2 : m.score1 }; };
+
+  const getPlayerHistory = (pid) => {
+    const results = [];
+    const collect = (matches) => {
+      (matches || []).forEach(m => {
+        if (!m.completed) return;
+        if (m.player1 !== pid && m.player2 !== pid) return;
+        const isP1 = m.player1 === pid;
+        const myScore  = isP1 ? m.score1 : m.score2;
+        const oppScore = isP1 ? m.score2 : m.score1;
+        const oppId    = isP1 ? m.player2 : m.player1;
+        const typeLabel = m.type === "wildcard" ? "Wild Card" : m.type === "open" ? "Open" : "Box";
+        results.push({ id: m.id, oppName: gn(oppId), typeLabel, won: myScore > oppScore, myScore, oppScore, completedAt: m.completedAt || "", forfeit: !!m.forfeit });
+      });
+    };
+    collect(st.boxMatches); collect(st.wildCards); collect(st.openChallenges);
+    [...(st.pastCycles || [])].reverse().forEach(c => { collect(c.boxMatches); collect(c.wildCards); collect(c.openChallenges); });
+    results.sort((a, b) => b.completedAt.localeCompare(a.completedAt));
+    return results.slice(0, 10);
+  };
+
+  // Last completed cycle champions (all box winners)
+  const lastCyc = st.pastCycles && st.pastCycles.length ? st.pastCycles[st.pastCycles.length - 1] : null;
+  const lastChamps = lastCyc
+    ? (lastCyc.boxes || []).map((box, bi) => { const bm = (lastCyc.boxMatches || []).filter(m => m.box === bi && m.completed && !m.forfeit && !(m.score1 === 0 && m.score2 === 0)); const bs = bm.length ? boxSt(box.players, bm) : []; return bs[0] ? { box: box.name, name: gn(bs[0].id), isSwing: box.isSwing } : null; }).filter(Boolean)
+    : [];
+
+  // Cycle progress summary
+  const boxSummaries = (st.boxes || []).map((box, bi) => {
+    const bm = (st.boxMatches || []).filter(m => m.box === bi);
+    const done = bm.filter(m => m.completed && !m.forfeit).length;
+    const total = bm.length;
+    const bs = boxSt(box.players, bm);
+    const complete = total > 0 && bm.every(m => m.completed);
+    return { box, bi, done, total, bs, complete };
+  });
+  const totalDone = (st.boxMatches || []).filter(m => m.completed && !m.forfeit).length + (st.wildCards || []).filter(m => m.completed && !m.forfeit).length;
+  const totalPend = (st.boxMatches || []).filter(m => !m.completed).length + (st.wildCards || []).filter(m => !m.completed).length;
+
+  // Overdue match detection
+  const daysInRound = st.cycleStart ? dd(nw(), st.cycleStart) : 0;
+  const daysLeft = st.cycleStart && st.cycleDurationWeeks ? ((st.cycleDurationWeeks || 4) * 7) - daysInRound : 999;
+  const pendingMatches = [...(st.boxMatches || []), ...(st.wildCards || [])].filter(m => !m.completed);
+  const overdueCount = pendingMatches.length;
+  const urgency = daysLeft <= 3 ? "urgent" : daysLeft <= 7 ? "warning" : "normal";
+
+  const historyRows = [...st.pastCycles].reverse().map(c => {
+    const cChamps = (c.boxes || []).map((box, bi) => { const bm = (c.boxMatches || []).filter(m => m.box === bi && m.completed && !m.forfeit && !(m.score1 === 0 && m.score2 === 0)); const bs = bm.length ? boxSt(box.players, bm) : []; return bs[0] ? { box: box.name, name: gn(bs[0].id) } : null; }).filter(Boolean);
+    if (!cChamps.length) return null;
+    return (
+      <div key={c.cycle} style={{ marginBottom: 10 }}>
+        <p style={{ fontSize: 9, color: c.randomized ? P.wc : P.dim, fontWeight: 700, letterSpacing: 1, marginBottom: 4 }}>{c.randomized ? "🎲 " : ""}ROUND {c.cycle} · {fmtDate(c.startedAt)}{c.randomized ? " · RANDOMIZED" : ""}</p>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          {cChamps.map((w, i) => <span key={i} style={{ fontSize: 10, color: P.off, background: c.randomized ? "rgba(196,161,255,.12)" : "rgba(0,48,82,.4)", padding: "3px 8px", borderRadius: 6 }}>{c.randomized ? "🎱" : "\ud83e\udd47"} {w.box}: {w.name}</span>)}
+        </div>
+      </div>
+    );
+  });
+
+  // Season Awards
+  const activeLad = ladder.filter(s => s.mp > 0);
+  const seasonAwards = activeLad.length > 0 ? (() => {
+    const mostWins = activeLad.reduce((b, s) => s.wins > b.wins ? s : b);
+    const eloQ = Object.entries(eloData.ratings).filter(([id]) => (eloData.played[id] || 0) >= 3);
+    const highElo = eloQ.length ? eloQ.reduce((b, e) => e[1] > b[1] ? e : b) : null;
+    const hotStreak = activeLad.reduce((b, s) => s.streak > b.streak ? s : b);
+    const so = {};
+    const cso = (ms) => (ms || []).forEach(m => { if (m.completed && !m.forfeit) { if (m.score1 === 2 && m.score2 === 0) so[m.player1] = (so[m.player1] || 0) + 1; if (m.score2 === 2 && m.score1 === 0) so[m.player2] = (so[m.player2] || 0) + 1; }});
+    cso(st.boxMatches); cso(st.wildCards); cso(st.openChallenges);
+    (st.pastCycles || []).forEach(c => { cso(c.boxMatches); cso(c.wildCards); cso(c.openChallenges); });
+    const soE = Object.entries(so); const soK = soE.length ? soE.reduce((b, e) => e[1] > b[1] ? e : b) : null;
+    const ironMan = activeLad.reduce((b, s) => s.mp > b.mp ? s : b);
+    const imp = eloQ.length ? eloQ.reduce((b, e) => (e[1] - 1000) > (b[1] - 1000) ? e : b) : null;
+    return [
+      { icon: "\ud83c\udfc6", label: "Most Wins", name: mostWins.name, value: mostWins.wins + "W" },
+      highElo ? { icon: "\ud83d\udcc8", label: "Highest ELO", name: gn(highElo[0]), value: highElo[1] } : null,
+      { icon: "\ud83d\udd25", label: "Hot Streak", name: hotStreak.name, value: hotStreak.streak + "W" },
+      soK ? { icon: "\ud83e\uddf9", label: "Shutout King", name: gn(soK[0]), value: soK[1] + "\u00d7" } : null,
+      { icon: "\ud83d\udcaa", label: "Iron Man", name: ironMan.name, value: ironMan.mp + " MP" },
+      imp && imp[1] > 1000 ? { icon: "\u2b06\ufe0f", label: "Most Improved", name: gn(imp[0]), value: "+" + (imp[1] - 1000) } : null,
+    ].filter(Boolean);
+  })() : [];
+
+  return (
+    <div>
+      <header style={{ textAlign: "center", padding: "20px 0 12px" }}>
+        <DRALogo />
+        <p style={{ fontSize: 10, background: "linear-gradient(90deg," + P.orange + "," + P.amber + "," + P.blue + "," + P.orange + ")", backgroundSize: "300% 100%", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text", letterSpacing: 6, textTransform: "uppercase", marginTop: 8, fontWeight: 700, animation: "shimmer 4s linear infinite" }}>POOL LEAGUE</p>
+        {st.cycleNumber > 0 && (
+          <div style={{ ...gc, display: "inline-flex", gap: 16, marginTop: 10, padding: "6px 18px", borderRadius: 20, marginBottom: 0 }}>
+            <span style={{ fontSize: 11, color: P.grey }}>Round {st.cycleNumber}</span>
+            <span style={{ fontSize: 11, color: P.orange, fontWeight: 700 }}>{cd.d}d {cd.h}h {cd.m}m</span>
+            <span style={{ fontSize: 11, color: P.grey }}>{ladder.length} players</span>
+          </div>
+        )}
+      </header>
+
+      {/* League announcement banner */}
+      {st.announcement && st.announcement.text && (
+        <div style={{ ...gc, padding: "10px 14px", marginBottom: 8, borderLeft: "3px solid " + P.amber, display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ fontSize: 14 }}>📢</span>
+          <span style={{ fontSize: 12, color: P.white, flex: 1 }}>{st.announcement.text}</span>
+          <span style={{ fontSize: 9, color: P.dim }}>{fmtDate(st.announcement.createdAt)}</span>
+        </div>
+      )}
+
+      {/* Prominent countdown + overdue alerts */}
+      {st.cycleStart && totalPend > 0 && (
+        <div style={{ ...gc, padding: "10px 14px", marginBottom: 8, borderLeft: urgency === "urgent" ? "3px solid " + P.bad : urgency === "warning" ? "3px solid " + P.amber : "3px solid " + P.blue }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <span style={{ fontSize: 12, fontWeight: 700, color: urgency === "urgent" ? P.bad : urgency === "warning" ? P.amber : P.blue, animation: urgency === "urgent" ? "pulse 1.8s infinite" : "none" }}>
+              {urgency === "urgent" ? "🔴 " : urgency === "warning" ? "⚠️ " : ""}{Math.max(0, Math.ceil(daysLeft))} day{Math.ceil(daysLeft) !== 1 ? "s" : ""} remaining
+            </span>
+            <span style={{ fontSize: 11, color: P.grey }}>{totalPend} match{totalPend !== 1 ? "es" : ""} pending</span>
+          </div>
+        </div>
+      )}
+
+      {/* Cycle Progress — box-by-box summary */}
+      {st.cycleNumber > 0 && boxSummaries.length > 0 && (
+        <div style={{ ...gc, padding: "12px 16px" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+            <p style={{ fontSize: 9, color: P.blue, letterSpacing: 3, fontWeight: 700 }}>ROUND {st.cycleNumber} PROGRESS</p>
+            <span style={{ fontSize: 10, color: P.dim }}>{totalDone} played · {totalPend} pending</span>
+          </div>
+          {boxSummaries.map(({ box, bi, done, total, bs, complete }) => (
+            <div key={bi} style={{ display: "flex", alignItems: "center", gap: 10, padding: "7px 0", borderBottom: bi < boxSummaries.length - 1 ? "1px solid rgba(21,152,203,.08)" : "none" }}>
+              <span style={{ fontSize: 9, fontWeight: 700, color: box.isSwing ? P.blue : P.orange, width: 52, letterSpacing: 1 }}>{box.name.toUpperCase()}</span>
+              <span style={{ flex: 1, fontSize: 12, color: complete ? P.ok : P.off }}>
+                {complete ? "\u2713 " + (bs[0] ? gn(bs[0].id) : "—") : done > 0 ? (bs[0] ? gn(bs[0].id) + " leads" : "—") : "No matches yet"}
+              </span>
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <div style={{ width: 48, height: 4, borderRadius: 2, background: "rgba(255,255,255,.1)", overflow: "hidden" }}>
+                  <div style={{ width: total > 0 ? (done / total * 100) + "%" : "0%", height: "100%", background: complete ? P.ok : P.orange, borderRadius: 2, transition: "width .3s" }} />
+                </div>
+                <span style={{ fontSize: 9, color: P.dim, width: 22, textAlign: "right" }}>{done}/{total}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Last Round Champions */}
+      {lastChamps.length > 0 && (
+        lastCyc.randomized ? (
+          <div style={{ ...gc, padding: "12px 16px", background: "linear-gradient(135deg, rgba(196,161,255,.1), rgba(21,152,203,.08))", borderColor: "rgba(196,161,255,.3)" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+              <p style={{ fontSize: 9, color: P.wc, letterSpacing: 3, fontWeight: 700 }}>🎲 ROUND {lastCyc.cycle} · RANDOMIZED</p>
+              {st.pastCycles.length > 1 && (
+                <button onClick={() => setShowChampHistory(v => !v)} style={{ fontSize: 9, fontWeight: 700, padding: "3px 10px", borderRadius: 10, background: showChampHistory ? "rgba(196,161,255,.2)" : "transparent", border: "1px solid rgba(196,161,255,.4)", color: P.wc, cursor: "pointer" }}>
+                  🎲 History {showChampHistory ? "▲" : "▼"}
+                </button>
+              )}
+            </div>
+            <p style={{ fontSize: 10, color: P.dim, marginBottom: 10 }}>Boxes were randomly assigned — all winners equal</p>
+            {lastChamps.map((w, i) => (
+              <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "5px 0", borderBottom: i < lastChamps.length - 1 ? "1px solid rgba(196,161,255,.08)" : "none" }}>
+                <span style={{ fontSize: 9, fontWeight: 700, color: P.wc, width: 60 }}>{w.box}</span>
+                <span style={{ flex: 1, fontSize: 13, color: P.white, fontWeight: 600, fontFamily: "Georgia,serif" }}>🎱 {w.name}</span>
+              </div>
+            ))}
+            {showChampHistory && <div style={{ marginTop: 12, borderTop: "1px solid rgba(196,161,255,.15)", paddingTop: 10 }}>{historyRows}</div>}
+          </div>
+        ) : (
+          <div style={{ ...gc, padding: "12px 16px", background: "linear-gradient(135deg, rgba(241,138,0,.12), rgba(21,152,203,.08))", borderColor: "rgba(241,138,0,.3)" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+              <p style={{ fontSize: 9, color: P.orange, letterSpacing: 3, fontWeight: 700 }}>ROUND {lastCyc.cycle} CHAMPIONS</p>
+              {st.pastCycles.length > 1 && (
+                <button onClick={() => setShowChampHistory(v => !v)} style={{ fontSize: 9, fontWeight: 700, padding: "3px 10px", borderRadius: 10, background: showChampHistory ? "rgba(241,138,0,.2)" : "transparent", border: "1px solid rgba(241,138,0,.4)", color: P.amber, cursor: "pointer" }}>
+                  {"\ud83c\udfc6"} History {showChampHistory ? "▲" : "▼"}
+                </button>
+              )}
+            </div>
+            {lastChamps.map((w, i) => (
+              <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "5px 0", borderBottom: i < lastChamps.length - 1 ? "1px solid rgba(21,152,203,.08)" : "none" }}>
+                <span style={{ fontSize: 9, fontWeight: 700, color: w.isSwing ? P.blue : P.orange, width: 60 }}>{w.box}</span>
+                <span style={{ flex: 1, fontSize: 13, color: P.white, fontWeight: 600, fontFamily: "Georgia,serif" }}>{"\ud83e\udd47"} {w.name}</span>
+              </div>
+            ))}
+            {showChampHistory && <div style={{ marginTop: 12, borderTop: "1px solid rgba(21,152,203,.12)", paddingTop: 10 }}>{historyRows}</div>}
+          </div>
+        )
+      )}
+
+      {!st.cycleNumber && <div style={{ textAlign: "center", padding: "40px 0" }}><p style={{ fontSize: 44 }}>{"\ud83c\udfb1"}</p><p style={{ color: P.grey, marginTop: 10 }}>No active round yet.</p></div>}
+
+      {st.cycleNumber > 0 && ladder.length > 0 && (
+        <div>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <Sub>STANDINGS</Sub>
+            <button onClick={() => setActiveOnly(v => !v)} style={{ fontSize: 9, fontWeight: 700, padding: "3px 10px", borderRadius: 10, background: activeOnly ? P.orange : "transparent", border: "1px solid " + (activeOnly ? P.orange : P.dim), color: activeOnly ? P.navy : P.dim, cursor: "pointer", marginBottom: 8 }}>Active Only</button>
+          </div>
+          <div style={gt}>
+            <div style={{ display: "flex", padding: "9px 10px", background: "rgba(0,48,82,.5)", gap: 4 }}>
+              {[["#", 22], ["Player", 0], ["Tot", 28], ["Box", 28], ["Opn", 28], ["W", 22], ["L", 22]].map(([l, w]) => <span key={l + w} style={{ ...ths, width: w || undefined, flex: w ? undefined : 1 }}>{l}</span>)}
+            </div>
+            {displayLad.map((s, i) => (
+              <div key={s.id}>
+                <div onClick={() => setExp(exp === s.id ? null : s.id)} style={{ display: "flex", padding: "9px 10px", gap: 4, borderBottom: exp === s.id ? "none" : "1px solid rgba(21,152,203,.08)", background: i === 0 ? "rgba(241,138,0,.12)" : i % 2 === 0 ? "rgba(0,48,79,.2)" : "transparent", borderLeft: i === 0 ? "3px solid " + P.orange : "3px solid transparent", cursor: "pointer" }}>
+                  <span style={{ width: 22, fontWeight: 700, fontSize: 12, color: i === 0 ? P.orange : i < 3 ? P.blue : P.dim }}>{i === 0 ? "\ud83d\udc51" : i + 1}{i > 0 && displayLad[i-1] && displayLad[i-1].points === s.points && <span onClick={(e) => { e.stopPropagation(); setTieExplain(tieExplain === s.id ? null : s.id); }} style={{ fontSize: 8, color: P.dim, cursor: "pointer", marginLeft: 1 }}>=</span>}</span>
+                  <span style={{ flex: 1, fontWeight: i < 3 ? 600 : 400, fontSize: 12 }}><span onClick={(e) => { e.stopPropagation(); setProfileId(s.id); }} style={{ cursor: "pointer", borderBottom: "1px dashed " + P.dim }}>{s.name}</span><StreakBadge streak={s.streak} /></span>
+                  <span style={{ width: 28, fontWeight: 700, color: P.orange, fontSize: 12 }}>{s.points}</span>
+                  <span style={{ width: 28, color: P.amber, fontSize: 11 }}>{s.boxPts}</span>
+                  <span style={{ width: 28, color: P.blue, fontSize: 11 }}>{s.openPts}</span>
+                  <span style={{ width: 22, color: P.ok, fontSize: 11 }}>{s.wins}</span>
+                  <span style={{ width: 22, color: P.bad, fontSize: 11 }}>{s.losses}</span>
+                </div>
+                {tieExplain === s.id && i > 0 && displayLad[i-1] && (() => { const reason = explainTie(s, displayLad[i-1]); return reason ? <div style={{ padding: "4px 10px 6px 30px", background: "rgba(21,152,203,.06)", fontSize: 10, color: P.blue, animation: "fadeIn .15s" }}>Ranked #{i+1} because: {reason}</div> : null; })()}
+                {exp === s.id && (() => {
+                  const elo = eloData.ratings[s.id] || 1000;
+                  const prev = prevElo.ratings[s.id] || 1000;
+                  const eloDelta = elo - prev;
+                  const rank = eloRank[s.id] || "—";
+                  const hist = getPlayerHistory(s.id);
+                  return (
+                    <div style={{ padding: "8px 12px 10px 12px", background: "rgba(0,20,40,.7)", borderBottom: "1px solid rgba(21,152,203,.08)", animation: "fadeIn .15s" }}>
+                      <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 4 }}>
+                        <span style={{ fontSize: 11, color: P.grey }}>W/L: <span style={{ color: P.ok }}>{s.wins}</span>/<span style={{ color: P.bad }}>{s.losses}</span></span>
+                        <span style={{ fontSize: 11, color: P.grey }}>Games: <span style={{ color: P.off }}>{s.rw}-{s.rl}</span></span>
+                        <span style={{ fontSize: 11, color: P.grey }}>Played: <span style={{ color: P.off }}>{s.mp}</span></span>
+                        <span style={{ fontSize: 11, color: P.grey }}>Last: <span style={{ color: P.off }}>{s.last ? new Date(s.last).toLocaleDateString() : "N/A"}</span></span>
+                        {s.inactive && <span style={{ fontSize: 11, color: P.bad }}>Inactive</span>}
+                      </div>
+                      {(eloData.played[s.id] || 0) >= ELO_MIN ? (
+                        <div style={{ marginBottom: 8 }}>
+                          <span style={{ fontSize: 11, color: P.grey }}>ELO: <span style={{ color: P.blue, fontWeight: 700 }}>{elo}</span>{eloDelta !== 0 && <span style={{ color: eloDelta > 0 ? P.ok : P.bad }}> ({eloDelta > 0 ? "+" : ""}{eloDelta})</span>} <span style={{ color: P.dim }}>#{rank}</span></span>
+                        </div>
+                      ) : (
+                        <div style={{ marginBottom: 8 }}>
+                          <span style={{ fontSize: 11, color: P.dim }}>ELO unlocks after {ELO_MIN - (eloData.played[s.id] || 0)} more match{ELO_MIN - (eloData.played[s.id] || 0) !== 1 ? "es" : ""}</span>
+                        </div>
+                      )}
+                      {!hist.length ? <p style={{ fontSize: 10, color: P.dim, fontStyle: "italic" }}>No match history.</p> : (
+                        <div>
+                          <p style={{ fontSize: 9, fontWeight: 700, color: P.blue, letterSpacing: 2, textTransform: "uppercase", marginBottom: 5 }}>Match History</p>
+                          {hist.map(h => {
+                            const d = eloData.deltas[h.id];
+                            const eloDlt = d ? d[s.id] : null;
+                            return (
+                              <div key={h.id} style={{ display: "flex", alignItems: "center", gap: 6, padding: "4px 0", borderBottom: "1px solid rgba(21,152,203,.06)" }}>
+                                <span style={{ fontSize: 10, fontWeight: 700, color: h.forfeit ? P.dim : h.won ? P.ok : P.bad, width: 14, flexShrink: 0 }}>{h.forfeit ? "FF" : h.won ? "W" : "L"}</span>
+                                <span style={{ fontSize: 11, color: P.off, width: 30, flexShrink: 0 }}>{h.forfeit ? "—" : h.myScore + "-" + h.oppScore}</span>
+                                <span style={{ fontSize: 11, color: P.white, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>vs {h.oppName}</span>
+                                <span style={{ fontSize: 9, fontWeight: 700, color: h.typeLabel === "Open" ? P.blue : h.typeLabel === "Wild Card" ? P.amber : P.orange, flexShrink: 0 }}>{h.typeLabel}</span>
+                                {eloDlt !== null && !h.forfeit && <span style={{ fontSize: 9, fontWeight: 700, color: eloDlt > 0 ? P.ok : P.bad, flexShrink: 0, minWidth: 28, textAlign: "right" }}>{eloDlt > 0 ? "+" : ""}{eloDlt}</span>}
+                                <span style={{ fontSize: 9, color: P.dim, flexShrink: 0 }}>{h.completedAt ? fmtDate(h.completedAt) : ""}</span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
+              </div>
+            ))}
+          </div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 10 }}>
+            {[[P.orange, "Total"], [P.amber, "Box"], [P.blue, "Open"], ["", "\ud83d\udd25 Streak"]].map(([c, t]) => <span key={t} style={{ fontSize: 9, color: P.grey, display: "flex", alignItems: "center", gap: 3 }}>{c && <span style={{ width: 6, height: 6, borderRadius: "50%", background: c }} />}{t}</span>)}
+          </div>
+        </div>
+      )}
+
+      {seasonAwards.length > 0 && (
+        <div style={{ marginTop: 16 }}>
+          <p style={{ fontSize: 10, fontWeight: 700, letterSpacing: 3, color: P.orange, textTransform: "uppercase", marginBottom: 10 }}>SEASON AWARDS</p>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+            {seasonAwards.map((a, i) => (
+              <div key={i} style={{ ...gc, padding: 10, marginBottom: 0, borderRadius: 14, textAlign: "center" }}>
+                <div style={{ fontSize: 18, marginBottom: 2 }}>{a.icon}</div>
+                <div style={{ fontSize: 8, fontWeight: 700, letterSpacing: 2, color: P.orange, textTransform: "uppercase", marginBottom: 3 }}>{a.label}</div>
+                <div style={{ fontSize: 12, fontWeight: 600, color: P.white, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{a.name}</div>
+                <div style={{ fontSize: 11, fontWeight: 700, color: P.blue }}>{a.value}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {last5.length > 0 && <div style={{ marginTop: 12 }}><Sub>RECENT OPEN CHALLENGES</Sub><div style={{ ...gc, padding: 0, overflow: "hidden" }}>{last5.map(m => (<div key={m.id} style={{ display: "flex", alignItems: "center", padding: "8px 12px", borderBottom: "1px solid rgba(21,152,203,.06)" }}><span style={{ flex: 1, fontSize: 12, fontWeight: m.score1 > m.score2 ? 700 : 400, textAlign: "right", paddingRight: 8, color: m.score1 > m.score2 ? P.ok : P.off }}>{gn(m.player1)}</span><span style={{ fontSize: 13, fontWeight: 700, color: P.blue, width: 44, textAlign: "center" }}>{m.score1}-{m.score2}</span><span style={{ flex: 1, fontSize: 12, fontWeight: m.score2 > m.score1 ? 700 : 400, paddingLeft: 8, color: m.score2 > m.score1 ? P.ok : P.off }}>{gn(m.player2)}</span></div>))}</div></div>}
+
+      <div style={{ textAlign: "center", padding: "20px 0 10px" }}>
+        <button onClick={onJoin} style={{ padding: "14px 36px", background: "linear-gradient(135deg," + P.orange + "," + P.amber + ")", border: "none", borderRadius: 14, color: P.navy, fontSize: 15, fontWeight: 700, cursor: "pointer", boxShadow: "0 4px 20px rgba(241,138,0,.3)", marginBottom: 16 }}>
+          🎱 Join the League
+        </button>
+        <div style={{ width: 40, height: 1, background: "linear-gradient(90deg,transparent," + P.orange + ",transparent)", margin: "0 auto 10px" }} />
+        <p style={{ fontSize: 12, color: P.dim, fontStyle: "italic", fontFamily: "Georgia,serif", letterSpacing: 2 }}>DRAck 'Em Up</p>
+      </div>
+      {profileId && <PlayerCard pid={profileId} st={st} ladder={ladder} gn={gn} eloData={eloData} getPlayerHistory={getPlayerHistory} onClose={() => setProfileId(null)} />}
+    </div>
+  );
+}
+
+// ─── BOXES ───────────────────────────────────────────────────
+function BoxesV({ st, gn, ini, logR, ffM }) {
+  const [col, setCol] = useState({});
+  const [activeMatchId, setActiveMatchId] = useState(null);
+  const [s1, setS1] = useState(2); const [s2, setS2] = useState(0);
+  const [ffConf, setFfConf] = useState(null);
+  const valid = (s1 === 2 && s2 < 2) || (s2 === 2 && s1 < 2);
+  const sub = (id, list) => { if (valid) { logR(id, s1, s2, list); setActiveMatchId(null); setS1(2); setS2(0); } };
+  const openEntry = (id) => { setActiveMatchId(id); setS1(2); setS2(0); setFfConf(null); };
+  const ScoreEntry = ({ m, list }) => (
+    <div style={{ background: "rgba(0,20,40,.5)", borderRadius: 10, padding: "10px 12px", marginTop: 8, border: "1px solid rgba(21,152,203,.25)" }}>
+      <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+        {[m.player1, m.player2].map((pid, pi) => {
+          const cur = pi === 0 ? s1 : s2, set = pi === 0 ? setS1 : setS2, ov = pi === 0 ? s2 : s1, so = pi === 0 ? setS2 : setS1;
+          return (
+            <div key={pi} style={{ flex: 1, textAlign: "center" }}>
+              <p style={{ fontSize: 13, color: P.white, marginBottom: 8, fontWeight: 600 }}>{gn(pid)}</p>
+              <div style={{ display: "flex", gap: 6, justifyContent: "center" }}>
+                {[0, 1, 2].map(v => <button key={v} onClick={() => { set(v); if (v === 2 && ov === 2) so(1); }} style={{ width: 48, height: 48, borderRadius: 12, border: "none", cursor: "pointer", fontSize: 18, fontWeight: 700, background: cur === v ? "linear-gradient(135deg," + P.orange + "," + P.amber + ")" : "rgba(255,255,255,.08)", color: cur === v ? P.navy : P.off, transition: "transform .1s", transform: cur === v ? "scale(1.08)" : "scale(1)" }}>{v}</button>)}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      {valid && <p style={{ textAlign: "center", fontSize: 13, fontWeight: 700, color: P.white, margin: "4px 0 8px" }}>{gn(m.player1)} {s1} – {s2} {gn(m.player2)}</p>}
+      <div style={{ display: "flex", gap: 6 }}>
+        <button onClick={() => sub(m.id, list)} disabled={!valid} style={{ flex: 1, padding: "10px 0", background: valid ? "linear-gradient(135deg,#34D399,#059669)" : "rgba(255,255,255,.08)", border: "none", borderRadius: 10, color: valid ? "#fff" : P.dim, fontWeight: 700, fontSize: 13, cursor: valid ? "pointer" : "default" }}>{valid ? "Confirm " + s1 + " – " + s2 : "Pick scores"}</button>
+        <button onClick={() => setActiveMatchId(null)} style={{ padding: "8px 14px", background: "transparent", border: "1px solid " + P.dim, borderRadius: 8, color: P.dim, fontWeight: 700, fontSize: 12, cursor: "pointer" }}>Cancel</button>
+        {ffConf !== m.id
+          ? <button onClick={() => setFfConf(m.id)} style={{ padding: "8px 14px", background: "transparent", border: "1px solid rgba(248,113,113,.4)", borderRadius: 8, color: P.bad, fontWeight: 700, fontSize: 12, cursor: "pointer" }}>Not played</button>
+          : <button onClick={() => { ffM(m.id, list); setActiveMatchId(null); setFfConf(null); }} style={{ padding: "8px 14px", background: P.bad, border: "none", borderRadius: 8, color: "#fff", fontWeight: 700, fontSize: 12, cursor: "pointer" }}>Confirm</button>}
+      </div>
+    </div>
+  );
+  if (!st.boxes || !st.boxes.length) return <div style={{ textAlign: "center", padding: 50 }}><p style={{ fontSize: 44 }}>{"\ud83d\udcca"}</p><p style={{ color: P.grey, marginBottom: 6 }}>No active round</p><p style={{ fontSize: 11, color: P.dim }}>The admin will start the next round once enough players have checked in.</p></div>;
+  const getS = (bm, p1, p2) => { const m = bm.find(m => (m.player1 === p1 && m.player2 === p2) || (m.player1 === p2 && m.player2 === p1)); if (!m) return null; if (!m.completed) return { pending: true, id: m.id }; return { s1: m.player1 === p1 ? m.score1 : m.score2, s2: m.player1 === p1 ? m.score2 : m.score1 }; };
+  const togCol = (k) => setCol(c => ({ ...c, [k]: !c[k] }));
+  return (
+    <div style={{ paddingTop: 16 }}><Tt>Boxes — Round {st.cycleNumber}</Tt>
+      {st.boxes.map((box, bi) => { const bm = st.boxMatches.filter(m => m.box === bi); const bs = boxSt(box.players, bm); const pids = bs.map(s => s.id); const done = bm.length > 0 && bm.every(m => m.completed); const isCol = col["box_" + bi];
+        const activeM = activeMatchId ? (st.boxMatches || []).find(m => m.id === activeMatchId && m.box === bi) : null;
+        return (
+          <div key={bi} style={{ marginBottom: 16 }}>
+            <div onClick={() => togCol("box_" + bi)} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, cursor: "pointer", userSelect: "none" }}>
+              <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: 2, color: box.isSwing ? P.blue : P.orange }}>{box.name.toUpperCase()}</span>
+              {done && <span style={{ fontSize: 8, color: P.ok, fontWeight: 700, background: "rgba(52,211,153,.1)", padding: "2px 8px", borderRadius: 10 }}>COMPLETE</span>}
+              <span style={{ marginLeft: "auto", fontSize: 10, color: P.dim }}>{isCol ? "▶" : "▼"}</span>
+            </div>
+            {!isCol && <div style={{ ...gc, padding: 0, overflow: "hidden" }}><div style={{ overflowX: "auto" }}><table style={{ borderCollapse: "collapse", width: "100%", minWidth: pids.length * 50 + 130 }}>
+              <thead><tr><th style={{ ...gth, textAlign: "left", minWidth: 80, position: "sticky", left: 0, zIndex: 1, background: P.mid }}>Player</th><th style={{ ...gth, width: 36 }}>Pts</th>{pids.map(id => <th key={id} style={{ ...gth, width: 46 }}>{ini(id)}</th>)}</tr></thead>
+              <tbody>{pids.map((pid, ri) => (<tr key={pid}><td style={{ ...gtd, textAlign: "left", fontWeight: 600, fontSize: 12, position: "sticky", left: 0, zIndex: 1, background: P.navy }}>{gn(pid)}</td><td style={{ ...gtd, fontWeight: 700, color: P.orange }}>{bs[ri] ? bs[ri].pts : 0}</td>
+                {pids.map(oid => { if (pid === oid) return <td key={oid} style={{ ...gtd, background: "rgba(0,48,82,.4)" }} />; const sc = getS(bm, pid, oid); if (!sc) return <td key={oid} style={{ ...gtd, color: P.dim }}>{"—"}</td>; if (sc.pending) return <td key={oid} onClick={() => openEntry(sc.id)} style={{ ...gtd, background: activeMatchId === sc.id ? "rgba(241,138,0,.3)" : "rgba(241,138,0,.12)", cursor: "pointer" }}><span style={{ display: "inline-block", width: 8, height: 8, borderRadius: "50%", background: P.orange, animation: "pulse 1.8s infinite" }} /></td>; if (sc.s1 === 0 && sc.s2 === 0) return <td key={oid} style={{ ...gtd, color: P.dim, fontSize: 10, fontStyle: "italic" }}>FF</td>; const w = sc.s1 > sc.s2; return <td key={oid} style={{ ...gtd, fontWeight: 700, color: w ? P.ok : P.bad, background: w ? "rgba(52,211,153,.08)" : "rgba(248,113,113,.06)" }}>{sc.s1}-{sc.s2}</td>; })}
+              </tr>))}</tbody></table></div>
+              {activeM && <div style={{ padding: "0 8px 8px" }}><ScoreEntry m={activeM} list="boxMatches" /></div>}
+            </div>}
+            {!isCol && done && <div style={{ display: "flex", gap: 12, marginTop: 6 }}><span style={{ fontSize: 10, color: P.orange }}>{"\ud83e\udd47"} {gn(bs[0] ? bs[0].id : "")} (+3)</span>{bs[1] && <span style={{ fontSize: 10, color: P.grey }}>{"\ud83e\udd48"} {gn(bs[1].id)} (+1)</span>}</div>}
+          </div>); })}
+      {st.wildCards && st.wildCards.length > 0 && (
+        <div>
+          <div onClick={() => togCol("wc")} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, cursor: "pointer", userSelect: "none" }}>
+            <Sub style={{ margin: 0 }}>Wild Card Matches</Sub>
+            <span style={{ marginLeft: "auto", fontSize: 10, color: P.dim }}>{col["wc"] ? "▶" : "▼"}</span>
+          </div>
+          {!col["wc"] && <div style={{ ...gc, padding: 0, overflow: "hidden" }}>
+            {st.wildCards.map(m => {
+              const activeWC = activeMatchId === m.id;
+              return (
+                <div key={m.id}>
+                  <div style={{ display: "flex", alignItems: "center", padding: "9px 12px", borderBottom: "1px solid rgba(21,152,203,.06)" }}>
+                    <span style={{ flex: 1, fontSize: 13, fontWeight: 600, textAlign: "right", paddingRight: 8 }}>{gn(m.player1)}</span>
+                    {m.completed ? <span style={{ fontSize: 15, fontWeight: 700, color: P.orange, width: 50, textAlign: "center" }}>{m.score1}-{m.score2}</span> : <span onClick={() => openEntry(m.id)} style={{ fontSize: 9, color: activeWC ? P.orange : P.dim, width: 50, textAlign: "center", animation: "pulse 2s infinite", cursor: "pointer", fontWeight: activeWC ? 700 : 400 }}>LOG</span>}
+                    <span style={{ flex: 1, fontSize: 13, fontWeight: 600, paddingLeft: 8 }}>{gn(m.player2)}</span>
+                  </div>
+                  {activeWC && <div style={{ padding: "0 8px 8px" }}><ScoreEntry m={m} list="wildCards" /></div>}
+                </div>
+              );
+            })}
+          </div>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── MATCHES (with H2H) ─────────────────────────────────────
+function MatchesV({ st, gn, logR, ffM }) {
+  const [sc, setSc] = useState(null); const [s1, setS1] = useState(2); const [s2, setS2] = useState(0); const [ffConf, setFfConf] = useState(null);
+  const [filterPlayer, setFilterPlayer] = useState(null);
+  if (!st.cycleNumber) return <div style={{ textAlign: "center", padding: 50 }}><p style={{ fontSize: 44 }}>{"\ud83d\udcc5"}</p><p style={{ color: P.grey }}>No active round.</p></div>;
+  const valid = (s1 === 2 && s2 < 2) || (s2 === 2 && s1 < 2);
+  const sub = (id, list) => { if (valid) { logR(id, s1, s2, list); setSc(null); setS1(2); setS2(0); } };
+  const rm = (m, list, label, color) => {
+    const h2h = getH2H(m.player1, m.player2, st);
+    return (
+    <div key={m.id} style={{ ...gc, opacity: m.completed && sc !== m.id ? .5 : 1 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
+        <span style={{ fontSize: 8, fontWeight: 700, color, letterSpacing: 3 }}>{label}{m.boxName ? " — " + m.boxName : ""}</span>
+        {h2h && <span style={{ fontSize: 9, color: P.dim }}>H2H: {gn(m.player1).split(" ")[0]} {h2h.w1}-{h2h.w2} {gn(m.player2).split(" ")[0]}</span>}
+      </div>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <span style={{ flex: 1, fontSize: 14, fontWeight: 600 }}>{gn(m.player1)}</span>
+        <span style={{ fontSize: 14, fontWeight: 700, color: m.completed ? (m.forfeit ? P.dim : P.orange) : P.dim, padding: "0 10px" }}>{m.completed ? (m.forfeit ? "—" : m.score1 + " – " + m.score2) : "vs"}</span>
+        <span style={{ flex: 1, fontSize: 14, fontWeight: 600, textAlign: "right" }}>{gn(m.player2)}</span>
+      </div>
+      {m.completed && m.forfeit && <div style={{ fontSize: 11, color: P.dim, marginTop: 5, fontStyle: "italic" }}>Not played</div>}
+      {m.completed && !m.forfeit && !(m.score1 === 0 && m.score2 === 0) && <div style={{ fontSize: 11, color: P.ok, marginTop: 5 }}>{m.score1 > m.score2 ? gn(m.player1) : gn(m.player2)} wins</div>}
+      {m.completed && sc !== m.id && <button onClick={() => { setSc(m.id); setS1(m.score1 ?? 2); setS2(m.score2 ?? 0); }} style={{ marginTop: 6, padding: "5px 12px", background: "transparent", border: "1px solid " + P.dim, borderRadius: 8, color: P.dim, fontWeight: 600, fontSize: 10, cursor: "pointer" }}>Edit Score</button>}
+      {!m.completed && sc !== m.id && ffConf !== m.id && <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+        <button onClick={() => { setSc(m.id); setS1(2); setS2(0); }} style={{ ...bpS, width: "auto", display: "inline-block", padding: "8px 18px", marginTop: 0 }}>Log Score</button>
+        <button onClick={() => setFfConf(m.id)} style={{ padding: "8px 18px", background: "transparent", border: "1px solid " + P.dim, borderRadius: 10, color: P.dim, fontWeight: 700, fontSize: 12, cursor: "pointer" }}>Forfeit</button>
+      </div>}
+      {ffConf === m.id && <div style={{ marginTop: 10, padding: "10px 12px", background: "rgba(248,113,113,.08)", border: "1px solid rgba(248,113,113,.3)", borderRadius: 10 }}>
+        <p style={{ fontSize: 11, color: P.bad, marginBottom: 8 }}>Mark {gn(m.player1)} vs {gn(m.player2)} as not played?</p>
+        <div style={{ display: "flex", gap: 8 }}><button onClick={() => { ffM(m.id, list); setFfConf(null); }} style={{ ...bpS, marginTop: 0, background: P.bad, padding: "6px 16px", fontSize: 11 }}>Confirm</button><button onClick={() => setFfConf(null)} style={bcS}>Cancel</button></div>
+      </div>}
+      {sc === m.id && <div style={{ marginTop: 12, padding: 14, background: "rgba(0,20,40,.6)", borderRadius: 12, border: "1px solid " + P.gb }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 14 }}>
+          {["player1", "player2"].map((k, idx) => { const val = idx === 0 ? s1 : s2, sv = idx === 0 ? setS1 : setS2, ov = idx === 0 ? s2 : s1, so = idx === 0 ? setS2 : setS1; return (
+            <div key={k} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 5 }}>
+              <span style={{ fontSize: 11, fontWeight: 600, color: P.grey }}>{gn(m[k])}</span>
+              <div style={{ display: "flex", gap: 4 }}>{[0, 1, 2].map(v => <button key={v} onClick={() => { sv(v); if (v === 2 && ov === 2) so(1); }} style={{ width: 36, height: 36, display: "flex", alignItems: "center", justifyContent: "center", borderRadius: 10, background: val === v ? "linear-gradient(135deg," + P.orange + "," + P.amber + ")" : P.glass, border: "1px solid " + (val === v ? P.orange : P.gb), color: val === v ? P.navy : P.grey, fontSize: 16, fontWeight: 700, cursor: "pointer", transform: val === v ? "scale(1.08)" : "scale(1)" }}>{v}</button>)}</div>
+            </div>); })}
+        </div>
+        {valid ? <button onClick={() => sub(m.id, list)} style={bpS}>Confirm {s1} – {s2}</button> : <p style={{ fontSize: 10, color: P.dim, textAlign: "center", marginTop: 8 }}>One player must win 2</p>}
+        <button onClick={() => setSc(null)} style={bcS}>Cancel</button>
+      </div>}
+    </div>);
+  };
+  const [col, setCol] = useState({ done: true });
+  const togCol = (k) => setCol(c => ({ ...c, [k]: !c[k] }));
+  const SecHdr = ({ k, label }) => (
+    <div onClick={() => togCol(k)} style={{ display: "flex", alignItems: "center", cursor: "pointer", userSelect: "none", margin: "18px 0 8px" }}>
+      <span style={{ fontSize: 9, fontWeight: 700, color: P.orange, letterSpacing: 3, textTransform: "uppercase" }}>{label}</span>
+      <span style={{ marginLeft: 8, fontSize: 10, color: P.dim }}>{col[k] ? "▶" : "▼"}</span>
+    </div>
+  );
+  const bP = (st.boxMatches || []).filter(m => !m.completed), bD = (st.boxMatches || []).filter(m => m.completed);
+  const wP = (st.wildCards || []).filter(m => !m.completed), wD = (st.wildCards || []).filter(m => m.completed);
+  const oP = (st.openChallenges || []).filter(m => !m.completed), oD = (st.openChallenges || []).filter(m => m.completed);
+  const allM = [...bP, ...bD, ...wP, ...wD, ...oP, ...oD];
+  const allMPIds = [...new Set(allM.flatMap(m => [m.player1, m.player2]))];
+  const allMPlayers = allMPIds.map(id => ({ id, name: gn(id) })).sort((a, b) => a.name.localeCompare(b.name));
+  const showM = (m) => !filterPlayer || m.player1 === filterPlayer || m.player2 === filterPlayer;
+  const fbP = bP.filter(showM), fbD = bD.filter(showM);
+  const fwP = wP.filter(showM), fwD = wD.filter(showM);
+  const foP = oP.filter(showM), foD = oD.filter(showM);
+  return (<div style={{ paddingTop: 16 }}><Tt>Round {st.cycleNumber} Matches</Tt>
+    {allMPlayers.length > 0 && (
+      <select value={filterPlayer || ""} onChange={e => setFilterPlayer(e.target.value || null)} style={{ width: "100%", background: "rgba(0,20,40,.6)", border: "1px solid rgba(21,152,203,.3)", borderRadius: 10, color: filterPlayer ? P.off : P.dim, fontSize: 13, padding: "10px 14px", marginBottom: 12, appearance: "none", WebkitAppearance: "none", cursor: "pointer" }}>
+        <option value="">All matches</option>
+        {allMPlayers.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+      </select>
+    )}
+    {fbP.length > 0 && <div><SecHdr k="bp" label={"Box — Pending (" + fbP.length + ")"} />{!col["bp"] && fbP.map(m => rm(m, "boxMatches", "BOX", P.orange))}</div>}
+    {fwP.length > 0 && <div><SecHdr k="wp" label={"Wild Cards — Pending (" + fwP.length + ")"} />{!col["wp"] && fwP.map(m => rm(m, "wildCards", "WILD CARD", P.wc))}</div>}
+    {foP.length > 0 && <div><SecHdr k="op" label={"Open — Pending (" + foP.length + ")"} />{!col["op"] && foP.map(m => rm(m, "openChallenges", "OPEN", P.blue))}</div>}
+    {(fbD.length + fwD.length + foD.length > 0) && <div><SecHdr k="done" label={"Completed (" + (fbD.length + fwD.length + foD.length) + ")"} />{!col["done"] && <div>{fbD.map(m => rm(m, "boxMatches", "BOX", P.orange))}{fwD.map(m => rm(m, "wildCards", "WILD CARD", P.wc))}{foD.map(m => rm(m, "openChallenges", "OPEN", P.blue))}</div>}</div>}
+  </div>);
+}
+
+// ─── CHALLENGE ───────────────────────────────────────────────
+function ChallengeV({ players, newOC }) {
+  const [p1, setP1] = useState(""); const [p2, setP2] = useState("");
+  if (players.length < 2) return <div style={{ textAlign: "center", padding: 40 }}><p style={{ color: P.grey }}>Need 2+ players.</p></div>;
+  return (<div style={{ paddingTop: 16 }}><Tt>Open Challenge</Tt>
+    <p style={{ fontSize: 12, color: P.grey, marginBottom: 16 }}>Win=2pts. Lose=0. No cap on games played.</p>
+    <div style={gc}>
+      <label style={{ fontSize: 9, fontWeight: 700, color: P.orange, letterSpacing: 2, display: "block", marginBottom: 3 }}>CHALLENGER</label>
+      <select value={p1} onChange={e => setP1(e.target.value)} style={ssS}><option value="">Select...</option>{players.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select>
+      <div style={{ textAlign: "center", fontSize: 22, margin: "8px 0", opacity: .5 }}>{"\u2694\ufe0f"}</div>
+      <label style={{ fontSize: 9, fontWeight: 700, color: P.orange, letterSpacing: 2, display: "block", marginBottom: 3 }}>OPPONENT</label>
+      <select value={p2} onChange={e => setP2(e.target.value)} style={ssS}><option value="">Select...</option>{players.filter(p => p.id !== p1).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select>
+      <button onClick={() => { if (p1 && p2) { newOC(p1, p2); setP1(""); setP2(""); } }} disabled={!p1 || !p2} style={{ ...bpS, marginTop: 12, opacity: (!p1 || !p2) ? .35 : 1 }}>Create Challenge</button>
+    </div>
+  </div>);
+}
+
+// ─── CHECK IN ───────────────────────────────────────────────
+function CheckInV({ st, ladder, togCI, selLast, autoOpen, onAutoOpenDone }) {
+  const [search, setSearch] = useState("");
+  const [showSignUp, setShowSignUp] = useState(true);
+  const [showRemaining, setShowRemaining] = useState(false);
+  const [confirmJoinId, setConfirmJoinId] = useState(null);
+  const signupRef = React.useRef(null);
+  React.useEffect(() => {
+    if (!autoOpen) return;
+    setShowSignUp(true);
+    setShowRemaining(true);
+    setTimeout(() => { signupRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }); }, 150);
+    if (onAutoOpenDone) onAutoOpenDone();
+  }, [autoOpen]);
+  // Playing This Round — players in the current active round
+  const currentIds = new Set((st.boxes || []).flatMap(b => b.players));
+  const currentPlayers = ladder.filter(s => currentIds.has(s.id));
+
+  // Sign Up for Next Round
+  const playing = ladder.filter(s => st.checkedIn.includes(s.id));
+  const notPlaying = ladder.filter(s => !st.checkedIn.includes(s.id));
+  const boxWcIds = new Set([...(st.boxMatches || []), ...(st.wildCards || [])].filter(m => m.completed && !m.forfeit).flatMap(m => [m.player1, m.player2]));
+  const allCurrentIds = new Set([...(st.boxMatches || []), ...(st.wildCards || []), ...(st.openChallenges || [])].filter(m => m.completed && !m.forfeit).flatMap(m => [m.player1, m.player2]));
+  const returning = playing.filter(s => boxWcIds.has(s.id));
+  const newPlayers = playing.filter(s => !boxWcIds.has(s.id) && !allCurrentIds.has(s.id));
+  const other = playing.filter(s => allCurrentIds.has(s.id) && !boxWcIds.has(s.id));
+  const filtered = search.trim() ? notPlaying.filter(s => s.name.toLowerCase().includes(search.toLowerCase())) : notPlaying;
+
+  const secBtn = (label, show, onToggle, count) => (
+    <div onClick={onToggle} style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 0 6px", cursor: "pointer", userSelect: "none" }}>
+      <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: 2, color: P.dim }}>{show ? "\u25bc" : "\u25b6"}</span>
+      <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: 2, color: P.dim, textTransform: "uppercase" }}>{label}</span>
+      {count !== undefined && <span style={{ fontSize: 10, color: P.grey }}>({count})</span>}
+      <div style={{ flex: 1, height: 1, background: P.gb }} />
+    </div>
+  );
+
+  const playerRow = (s, action, actionLabel, actionStyle, badge) => (
+    <div key={s.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 4px", borderBottom: "1px solid rgba(21,152,203,.06)" }}>
+      {badge && <span style={{ fontSize: 8, fontWeight: 700, color: badge === "NEW" ? P.orange : P.ok, background: badge === "NEW" ? "rgba(241,138,0,.15)" : "rgba(52,211,153,.12)", border: badge === "NEW" ? "1px solid rgba(241,138,0,.3)" : "1px solid rgba(52,211,153,.35)", borderRadius: 4, padding: "1px 5px", letterSpacing: 1 }}>{badge}</span>}
+      <span style={{ flex: 1, fontSize: 13 }}>{s.name}</span>
+      {action && <button onClick={() => action(s.id)} style={actionStyle}>{actionLabel}</button>}
+    </div>
+  );
+
+  const leaveBtn = { padding: "4px 12px", background: "transparent", border: "1px solid " + P.bad, borderRadius: 8, color: P.bad, fontSize: 10, fontWeight: 700, cursor: "pointer" };
+  const joinBtn = { padding: "4px 12px", background: "linear-gradient(135deg," + P.orange + "," + P.amber + ")", border: "none", borderRadius: 8, color: P.navy, fontSize: 10, fontWeight: 700, cursor: "pointer" };
+
+  return (<div style={{ paddingTop: 16 }}>
+    {confirmJoinId !== null && (
+      <div style={{ position: "fixed", inset: 0, zIndex: 50, background: "rgba(0,10,20,.85)", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
+        <div style={{ ...gc, maxWidth: 320, width: "100%", textAlign: "center" }}>
+          <p style={{ fontSize: 16, fontWeight: 700, color: P.white, marginBottom: 8 }}>Join the League?</p>
+          <p style={{ fontSize: 13, color: P.grey, marginBottom: 20 }}>{(st.players.find(p => p.id === confirmJoinId) || {}).name || "This player"} will be signed up for the next round.</p>
+          <div style={{ display: "flex", gap: 10 }}>
+            <button onClick={() => { togCI(confirmJoinId); setConfirmJoinId(null); }} style={{ flex: 1, padding: "12px 0", background: "linear-gradient(135deg," + P.orange + "," + P.amber + ")", border: "none", borderRadius: 12, color: P.navy, fontSize: 14, fontWeight: 700, cursor: "pointer" }}>Yes, I'm in!</button>
+            <button onClick={() => setConfirmJoinId(null)} style={{ flex: 1, padding: "12px 0", background: "transparent", border: "1px solid " + P.dim, borderRadius: 12, color: P.grey, fontSize: 14, fontWeight: 700, cursor: "pointer" }}>No</button>
+          </div>
+        </div>
+      </div>
+    )}
+    <Tt>Players</Tt>
+    <p style={{ fontSize: 12, color: P.grey, marginBottom: 10 }}>{st.checkedIn.length} of {st.players.length} Signed up for next round</p>
+
+    {/* Playing This Round — read-only */}
+    {st.cycleNumber > 0 && currentPlayers.length > 0 && (<>
+      {secBtn("Playing This Round", true, () => {}, currentPlayers.length)}
+      <div style={gc}>
+        {currentPlayers.map(s => (
+          <div key={s.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 4px", borderBottom: "1px solid rgba(21,152,203,.06)" }}>
+            <span style={{ flex: 1, fontSize: 13 }}>{s.name}</span>
+            <span style={{ fontSize: 9, color: P.dim }}>active</span>
+          </div>
+        ))}
+      </div>
+    </>)}
+
+    {/* Sign Up for Next Round */}
+    {secBtn("Sign Up for Next Round", showSignUp, () => setShowSignUp(v => !v), playing.length)}
+    {/* Quick check-in button */}
+    {st.pastCycles.length > 0 && playing.length === 0 && (
+      <button onClick={selLast} style={{ ...bpS, marginBottom: 8 }}>Check in all from last round</button>
+    )}
+    {playing.length > 0 && <p style={{ fontSize: 11, color: P.ok, textAlign: "center", marginBottom: 6, fontWeight: 600 }}>{playing.length} checked in</p>}
+    {showSignUp && (
+      <div style={gc}>
+        {playing.length === 0 && <p style={{ fontSize: 12, color: P.dim, textAlign: "center", padding: "8px 0" }}>No one signed up yet. Use the button above or check in players individually.</p>}
+        {returning.map(s => playerRow(s, togCI, "Leave", leaveBtn, "RETURNING"))}
+        {newPlayers.map(s => playerRow(s, togCI, "Leave", leaveBtn, "NEW"))}
+        {other.map(s => playerRow(s, togCI, "Leave", leaveBtn, null))}
+
+        {/* Remaining — collapsed */}
+        <div ref={signupRef} onClick={() => setShowRemaining(v => !v)} style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 0 6px", cursor: "pointer", userSelect: "none", marginTop: 4, borderTop: "1px solid rgba(21,152,203,.08)" }}>
+          <span style={{ fontSize: 9, color: P.dim }}>{showRemaining ? "\u25bc" : "\u25b6"}</span>
+          <span style={{ fontSize: 10, fontWeight: 700, color: P.dim, letterSpacing: 1 }}>NOT SIGNED UP ({notPlaying.length})</span>
+        </div>
+        {showRemaining && (<>
+          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search..." style={{ ...inpS, width: "100%", marginBottom: 8, flex: "none", fontSize: 12 }} />
+          {filtered.map(s => playerRow(s, id => setConfirmJoinId(id), "Join", joinBtn, false))}
+          {filtered.length === 0 && search && <p style={{ color: P.dim, fontSize: 12, padding: "8px 0", textAlign: "center" }}>No matches for "{search}"</p>}
+          {filtered.length === 0 && !search && <p style={{ fontSize: 12, color: P.dim, textAlign: "center", padding: "8px 0" }}>Everyone is already signed up!</p>}
+        </>)}
+      </div>
+    )}
+  </div>);
+}
+
+// ─── RULES & SCORING ─────────────────────────────────────────
+function RulesV() {
+  const [tab, setTab] = useState("rules");
+  const tabBtn = (t, label) => (
+    <button onClick={() => setTab(t)} style={{ flex: 1, padding: "10px 0", borderRadius: 12, border: "none", cursor: "pointer", fontSize: 13, fontWeight: 700, background: tab === t ? P.orange : "rgba(21,152,203,.12)", color: tab === t ? P.navy : P.dim, transition: "background .2s" }}>{label}</button>
+  );
+  const Section = ({ title, color, children }) => (
+    <div style={gc}>
+      <h4 style={{ fontSize: 15, fontWeight: 700, color: color || P.orange, marginBottom: 12, fontFamily: "Georgia,serif", letterSpacing: 1 }}>{title}</h4>
+      {children}
+    </div>
+  );
+  const Row = ({ title, body, last }) => (
+    <div style={{ marginBottom: last ? 0 : 12, paddingBottom: last ? 0 : 12, borderBottom: last ? "none" : "1px solid rgba(21,152,203,.08)" }}>
+      <p style={{ fontSize: 13, fontWeight: 700, color: P.off, marginBottom: 3 }}>{title}</p>
+      <p style={{ fontSize: 12, color: P.grey, lineHeight: 1.65 }}>{body}</p>
+    </div>
+  );
+  const houseRules = [
+    ["1. Legal Break Shot", "Cue ball must start fully behind the kitchen — the line formed by the two diamonds at the break line. If you miss the rack completely, take another shot. One retry only."],
+    ["2. Take What You Make", "Whichever group (solids or stripes) you pocket more of on the break becomes yours. If you make one of each, the table stays open."],
+    ["3. Eight-Ball on the Break", "Pocket the 8-ball on the break without scratching or jumping the cue ball = instant win."],
+    ["4. Scratch on a Legal Break", "Scratching on the break is never a loss (unless the 8 also drops). Opponent gets ball-in-hand behind the kitchen. No debates about where the base of the ball is."],
+    ["5. Playing Out of the Kitchen & Scratches", "When the cue ball is behind the break line, your first hit must contact a ball or rail outside the kitchen. Any scratch (cue ball into a pocket) — whether playing out of the kitchen or during normal play — results in ball-in-hand behind the kitchen line only. Your opponent must place the cue ball behind the break line before shooting."],
+    ["6. Hit Your Own Balls First", "Must contact one of your own balls before anything else. Failure = loss of turn only — no ball-in-hand. Doing this on purpose is dirty pool."],
+    ["7. Balls Stay Down", "If you make a ball and scratch, that ball still counts and stays pocketed."],
+    ["8. Soft Calling (Be Honest)", "You don't need to call banks, kisses, or combos — just be honest about your intent. You may keep shooting only if you intended to make that ball, even if it drops in a different pocket. Accidentally making your opponent's ball = loss of turn."],
+    ["9. Eight-Ball Rules", "The 8-ball must be called, but you don't have to call the shot type. The 8-ball cannot be used in a combo. Hitting an opponent's ball first while shooting the 8 = loss of turn. Scratching or jumping the cue ball while shooting the 8 = loss of game."],
+    ["10. Sportsmanship", "Safeties are dirty pool unless they result from a genuine attempt to make a ball or break a cluster. If all your balls are tied up and there's truly no shot, say: \"I have nothing.\" Then play a shot that opens things up. Rail nursing or lagging the cue ball without touching the cluster will not be tolerated. Disputes = replay the shot. No arguments."],
+  ];
+  return (
+    <div style={{ paddingTop: 16 }}>
+      <Tt>Rules & Scoring</Tt>
+      <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+        {tabBtn("rules", "📋 Rules")}
+        {tabBtn("scoring", "🎯 Scoring")}
+      </div>
+
+      {tab === "rules" && (
+        <div>
+          <Section title="League Etiquette">
+            <Row title="Keep it friendly" body="Keep matches friendly and respectful — this is for fun. Good sportsmanship is expected at all times." />
+            <Row title="Loser racks" body="Loser racks; winner breaks the next game." />
+            <Row title="Respect the environment" body="This is a work environment — respect people's time and calendars. Close the doors if matches take place during office hours." />
+            <Row title="No coaching" body="Don't coach or comment during another player's shot. No slamming cues, trash talk, or excessive celebrations." />
+            <Row title="Log scores immediately" body="Scores must be logged in the app immediately after the match. Completed scores can be corrected via the Matches tab." />
+            <Row title="Disputes" body="If a situation isn't covered, default to the DRA House &quot;Bar&quot; Rules. Universal rule: if there's a dispute — replay the shot. No exceptions." last />
+          </Section>
+          <Section title="League Format">
+            <Row title="Box Structure" body="Players are grouped into boxes of up to 4. Full round-robin within each box — 3 matches per round. New/returning players start in the Swing Box." />
+            <Row title="Promotion & Relegation" body="Boxes are re-seeded each round based on ladder rank — the top-ranked players form Box 1, working down to the Swing Box. Win matches and earn points to climb the standings and earn a spot in a higher box next round. New players start in the Swing Box." />
+            <Row title="Wild Cards" body="Each player gets 1 wild card cross-box match per round, randomly assigned." />
+            <Row title="Open Challenges" body="Open Challenges are unlimited — challenge anyone in the office for 2 bonus points. No penalty for a loss." />
+            <Row title="Inactivity" body="No match in 42 days → marked inactive and dropped to the bottom of the standings." last />
+          </Section>
+          <Section title="DRA House Bar Rules" color={P.blue}>
+            {houseRules.map(([title, body], i) => (
+              <Row key={title} title={title} body={body} last={i === houseRules.length - 1} />
+            ))}
+          </Section>
+          <div style={{ ...gc, background: "rgba(241,138,0,.08)", border: "1px solid rgba(241,138,0,.25)", textAlign: "center" }}>
+            <p style={{ fontSize: 13, fontWeight: 700, color: P.orange }}>Good shots. Good vibes. 🎱</p>
+          </div>
+        </div>
+      )}
+
+      {tab === "scoring" && (
+        <div>
+          <Section title="Match Points">
+            <p style={{ fontSize: 11, color: P.dim, marginBottom: 12 }}>Applies to box matches and wild card matches. Best of 3 games (race to 2).</p>
+            <div style={{ borderRadius: 12, overflow: "hidden", border: "1px solid rgba(255,255,255,.1)" }}>
+              {[
+                ["Win 2–0", "Shutout — opponent scores 0 games", "5 pts", P.orange],
+                ["Win 2–1", "Win with opponent scoring 1 game", "4 pts", P.amber],
+                ["Loss 1–2", "Lose but score 1 game", "2 pts", P.blue],
+                ["Loss 0–2", "Lose without scoring", "0 pts", P.bad],
+              ].map(([result, desc, pts, color], i) => (
+                <div key={result} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", background: i % 2 === 0 ? "rgba(0,48,82,.4)" : "transparent", borderBottom: i < 3 ? "1px solid rgba(255,255,255,.05)" : "none" }}>
+                  <div style={{ flex: 1 }}>
+                    <p style={{ fontSize: 13, fontWeight: 700, color: P.off, marginBottom: 2 }}>{result}</p>
+                    <p style={{ fontSize: 10, color: P.dim }}>{desc}</p>
+                  </div>
+                  <span style={{ fontSize: 20, fontWeight: 700, color, minWidth: 48, textAlign: "right" }}>{pts}</span>
+                </div>
+              ))}
+            </div>
+            <p style={{ fontSize: 10, color: P.dim, marginTop: 8 }}>Tiebreaker: head-to-head record, then total wins, then total racks won.</p>
+          </Section>
+          <Section title="End-of-Round Bonuses">
+            <p style={{ fontSize: 11, color: P.dim, marginBottom: 12 }}>Awarded automatically when all matches in a box are complete.</p>
+            <div style={{ borderRadius: 12, overflow: "hidden", border: "1px solid rgba(255,255,255,.1)" }}>
+              {[
+                ["Box 1st Place", "Finish 1st in your box — Round Champion 🏆", "+3 pts", P.orange],
+                ["Box 2nd Place", "Finish 2nd in your box", "+1 pt", P.grey],
+              ].map(([result, desc, pts, color], i) => (
+                <div key={result} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", background: i % 2 === 0 ? "rgba(0,48,82,.4)" : "transparent", borderBottom: i < 1 ? "1px solid rgba(255,255,255,.05)" : "none" }}>
+                  <div style={{ flex: 1 }}>
+                    <p style={{ fontSize: 13, fontWeight: 700, color: P.off, marginBottom: 2 }}>{result}</p>
+                    <p style={{ fontSize: 10, color: P.dim }}>{desc}</p>
+                  </div>
+                  <span style={{ fontSize: 20, fontWeight: 700, color, minWidth: 48, textAlign: "right" }}>{pts}</span>
+                </div>
+              ))}
+            </div>
+          </Section>
+          <Section title="Open Challenges">
+            <div style={{ borderRadius: 12, overflow: "hidden", border: "1px solid rgba(255,255,255,.1)" }}>
+              {[
+                ["Win", "Defeat any opponent in an open challenge", "+2 pts", P.blue],
+                ["Loss", "Open challenge loss — no penalty", "0 pts", P.dim],
+              ].map(([result, desc, pts, color], i) => (
+                <div key={result} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", background: i % 2 === 0 ? "rgba(0,48,82,.4)" : "transparent", borderBottom: i < 1 ? "1px solid rgba(255,255,255,.05)" : "none" }}>
+                  <div style={{ flex: 1 }}>
+                    <p style={{ fontSize: 13, fontWeight: 700, color: P.off, marginBottom: 2 }}>{result}</p>
+                    <p style={{ fontSize: 10, color: P.dim }}>{desc}</p>
+                  </div>
+                  <span style={{ fontSize: 20, fontWeight: 700, color, minWidth: 48, textAlign: "right" }}>{pts}</span>
+                </div>
+              ))}
+            </div>
+          </Section>
+          <div style={{ ...gc, background: "rgba(21,152,203,.06)", border: "1px solid rgba(21,152,203,.2)" }}>
+            <h4 style={{ fontSize: 13, fontWeight: 700, color: P.blue, marginBottom: 10 }}>Best Possible Round</h4>
+            <p style={{ fontSize: 12, color: P.grey, lineHeight: 1.8 }}>
+              3× shutout box wins (3 × 5) → <span style={{ color: P.orange, fontWeight: 700 }}>15 pts</span><br />
+              Box winner bonus → <span style={{ color: P.orange, fontWeight: 700 }}>+3 pts</span><br />
+              Wild card shutout win → <span style={{ color: P.orange, fontWeight: 700 }}>+5 pts</span><br />
+              <span style={{ color: P.off, fontWeight: 700, fontSize: 13 }}>Box/WC total: 23 pts</span><br />
+              <span style={{ color: P.blue, fontSize: 11 }}>+ Open challenges: +2 pts each (unlimited)</span>
+            </p>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── ADMIN ───────────────────────────────────────────────────
+function PastCycleRow({ c, gn, cycleIdx, saveCycle }) {
+  const [open, setOpen] = useState(false);
+  const [tab, setTab] = useState("standings");
+  const [editMode, setEditMode] = useState(false);
+  const [editConfirm, setEditConfirm] = useState(false);
+  const [editingId, setEditingId] = useState(null);
+  const [eS1, setES1] = useState(0);
+  const [eS2, setES2] = useState(0);
+
+  const realBM = (c.boxMatches || []).filter(m => m.completed && !m.forfeit);
+  const realWC = (c.wildCards || []).filter(m => m.completed && !m.forfeit);
+  const realOC = (c.openChallenges || []).filter(m => m.completed && !m.forfeit);
+  const unplayed = (c.boxMatches || []).filter(m => m.forfeit).length + (c.wildCards || []).filter(m => m.forfeit).length;
+  const totalMatches = (c.boxMatches || []).length + (c.wildCards || []).length;
+  const totalReal = realBM.length + realWC.length + realOC.length;
+  const pct = totalMatches > 0 ? Math.round((totalReal / totalMatches) * 100) : 100;
+
+  // Champions per box
+  const champions = (c.boxes || []).map((box, bi) => {
+    const bm = (c.boxMatches || []).filter(m => m.box === bi && m.completed && !m.forfeit && !(m.score1 === 0 && m.score2 === 0));
+    const bs = bm.length ? boxSt(box.players, bm) : [];
+    return { boxName: box.name, isSwing: box.isSwing, winner: bs[0]?.id, runner: bs[1]?.id };
+  });
+
+  // Per-player cycle totals for Players tab
+  const pTotals = {};
+  const ensureP = id => { if (!pTotals[id]) pTotals[id] = { id, matchPts: 0, bonusPts: 0 }; };
+  [...realBM, ...realWC].forEach(m => {
+    ensureP(m.player1); ensureP(m.player2);
+    if (m.score1 > m.score2) { pTotals[m.player1].matchPts += m.score2 === 0 ? 5 : 4; if (m.score2 > 0) pTotals[m.player2].matchPts += 2; }
+    else { pTotals[m.player2].matchPts += m.score1 === 0 ? 5 : 4; if (m.score1 > 0) pTotals[m.player1].matchPts += 2; }
+  });
+  realOC.forEach(m => {
+    ensureP(m.player1); ensureP(m.player2);
+    if (m.score1 > m.score2) pTotals[m.player1].matchPts += 2; else pTotals[m.player2].matchPts += 2;
+  });
+  (c.bonuses || []).forEach(b => { ensureP(b.id); pTotals[b.id].bonusPts += b.pts; });
+  const playerList = Object.values(pTotals).map(p => ({ ...p, total: p.matchPts + p.bonusPts })).sort((a, b) => b.total - a.total);
+
+  const allMatches = [
+    ...realBM.map(m => ({ ...m, _type: "Box", _label: m.boxName || "Box" })),
+    ...realWC.map(m => ({ ...m, _type: "WC", _label: "Wild Card" })),
+    ...realOC.map(m => ({ ...m, _type: "Open", _label: "Open" })),
+  ].sort((a, b) => (a.completedAt || "").localeCompare(b.completedAt || ""));
+
+  const saveMatchEdit = (matchId, s1, s2) => {
+    const upd = list => list.map(m => m.id === matchId ? { ...m, score1: s1, score2: s2, forfeit: false } : m);
+    saveCycle(cycleIdx, { ...c, boxMatches: upd(c.boxMatches || []), wildCards: upd(c.wildCards || []), openChallenges: upd(c.openChallenges || []) });
+    setEditingId(null);
+  };
+
+  const saveBonusEdit = (playerId, newPts) => {
+    saveCycle(cycleIdx, { ...c, bonuses: (c.bonuses || []).map(b => b.id === playerId ? { ...b, pts: +newPts } : b) });
+  };
+
+  const tabBtn = (t, label) => (
+    <button key={t} onClick={() => setTab(t)} style={{ padding: "5px 12px", borderRadius: 8, border: "none", cursor: "pointer", fontSize: 11, fontWeight: 700, background: tab === t ? P.orange : "rgba(21,152,203,.12)", color: tab === t ? "#000" : P.dim }}>{label}</button>
+  );
+
+  return (
+    <div style={{ borderBottom: "1px solid rgba(21,152,203,.08)", paddingBottom: open ? 14 : 0, marginBottom: 8 }}>
+      <div onClick={() => setOpen(v => !v)} style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 0", cursor: "pointer", userSelect: "none" }}>
+        <div>
+          <span style={{ fontWeight: 700, color: P.orange, fontSize: 14 }}>Round {c.cycle}</span>
+          <span style={{ fontSize: 10, color: P.dim, marginLeft: 8 }}>{fmtDate(c.startedAt)}</span>
+        </div>
+        <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ fontSize: 10, color: P.dim }}>{totalReal}/{totalMatches} · {pct}%</span>
+          {unplayed > 0 && <span style={{ fontSize: 10, color: P.bad }}>{unplayed} N/P</span>}
+          <span style={{ fontSize: 10, color: P.dim }}>{open ? "▼" : "▶"}</span>
+        </div>
+      </div>
+
+      {open && (
+        <div>
+          {/* Champions callout */}
+          <div style={{ background: "rgba(255,184,0,.06)", border: "1px solid rgba(255,184,0,.15)", borderRadius: 10, padding: "10px 12px", marginBottom: 12 }}>
+            <p style={{ fontSize: 9, color: P.amber, fontWeight: 700, letterSpacing: 2, marginBottom: 8 }}>ROUND CHAMPIONS</p>
+            {champions.map((ch, i) => ch.winner && (
+              <div key={i} style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
+                <span style={{ fontSize: 9, color: ch.isSwing ? P.blue : P.dim, fontWeight: 700, width: 62, letterSpacing: 1, flexShrink: 0 }}>{ch.boxName.toUpperCase()}</span>
+                <span style={{ fontSize: 12, fontWeight: 700 }}>🥇 {gn(ch.winner)}</span>
+                {ch.runner && <span style={{ fontSize: 11, color: P.dim }}>· 🥈 {gn(ch.runner)}</span>}
+              </div>
+            ))}
+          </div>
+
+          {/* Tabs */}
+          <div style={{ display: "flex", gap: 6, marginBottom: 14 }}>
+            {tabBtn("standings", "Standings")}
+            {tabBtn("matches", "Match Log")}
+            {tabBtn("players", "Players")}
+          </div>
+
+          {/* ── STANDINGS TAB ── */}
+          {tab === "standings" && (
+            <div>
+              {(c.boxes || []).map((box, bi) => {
+                const bm = (c.boxMatches || []).filter(m => m.box === bi);
+                const bs = boxSt(box.players, bm);
+                if (!bs.length) return null;
+                return (
+                  <div key={bi} style={{ marginBottom: 14 }}>
+                    <p style={{ fontSize: 9, color: box.isSwing ? P.blue : P.orange, fontWeight: 700, letterSpacing: 2, marginBottom: 6 }}>{box.name.toUpperCase()}</p>
+                    <div style={{ display: "flex", gap: 6, padding: "3px 0 5px", borderBottom: "1px solid rgba(21,152,203,.18)" }}>
+                      <span style={{ width: 20 }} />
+                      <span style={{ flex: 1, fontSize: 9, color: P.dim, fontWeight: 700, letterSpacing: 1 }}>PLAYER</span>
+                      <span style={{ width: 24, fontSize: 9, color: P.dim, fontWeight: 700, textAlign: "center" }}>W</span>
+                      <span style={{ width: 24, fontSize: 9, color: P.dim, fontWeight: 700, textAlign: "center" }}>L</span>
+                      <span style={{ width: 34, fontSize: 9, color: P.dim, fontWeight: 700, textAlign: "right" }}>PTS</span>
+                    </div>
+                    {bs.map((s, ri) => (
+                      <div key={s.id} style={{ display: "flex", alignItems: "center", gap: 6, padding: "5px 0", borderBottom: "1px solid rgba(21,152,203,.04)", background: ri === 0 ? "rgba(255,184,0,.05)" : "transparent" }}>
+                        <span style={{ width: 20, fontSize: 13 }}>{ri === 0 ? "🥇" : ri === 1 ? "🥈" : ri === 2 ? "🥉" : (ri + 1) + "."}</span>
+                        <span style={{ flex: 1, fontSize: 12, fontWeight: ri === 0 ? 700 : 400 }}>{gn(s.id)}</span>
+                        <span style={{ width: 24, fontSize: 11, color: P.ok, fontWeight: 600, textAlign: "center" }}>{s.w}</span>
+                        <span style={{ width: 24, fontSize: 11, color: s.l > 0 ? P.bad : P.dim, textAlign: "center" }}>{s.l}</span>
+                        <span style={{ width: 34, fontSize: 12, color: ri === 0 ? P.orange : P.grey, fontWeight: 700, textAlign: "right" }}>{s.pts}</span>
+                      </div>
+                    ))}
+                  </div>
+                );
+              })}
+              {realWC.length > 0 && (
+                <div style={{ marginBottom: 10 }}>
+                  <p style={{ fontSize: 9, color: P.wc, fontWeight: 700, letterSpacing: 2, marginBottom: 6 }}>WILD CARDS</p>
+                  {realWC.map(m => (
+                    <div key={m.id} style={{ display: "flex", alignItems: "center", padding: "4px 0", borderBottom: "1px solid rgba(21,152,203,.04)", fontSize: 12, gap: 6 }}>
+                      <span style={{ flex: 1, textAlign: "right", fontWeight: m.score1 > m.score2 ? 700 : 400 }}>{gn(m.player1)}</span>
+                      <span style={{ color: P.wc, fontWeight: 700, width: 40, textAlign: "center" }}>{m.score1}–{m.score2}</span>
+                      <span style={{ flex: 1, fontWeight: m.score2 > m.score1 ? 700 : 400 }}>{gn(m.player2)}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {realOC.length > 0 && (
+                <div style={{ marginBottom: 10 }}>
+                  <p style={{ fontSize: 9, color: P.blue, fontWeight: 700, letterSpacing: 2, marginBottom: 6 }}>OPEN CHALLENGES</p>
+                  {realOC.map(m => (
+                    <div key={m.id} style={{ display: "flex", alignItems: "center", padding: "4px 0", borderBottom: "1px solid rgba(21,152,203,.04)", fontSize: 12, gap: 6 }}>
+                      <span style={{ flex: 1, textAlign: "right", fontWeight: m.score1 > m.score2 ? 700 : 400 }}>{gn(m.player1)}</span>
+                      <span style={{ color: P.blue, fontWeight: 700, width: 40, textAlign: "center" }}>{m.score1}–{m.score2}</span>
+                      <span style={{ flex: 1, fontWeight: m.score2 > m.score1 ? 700 : 400 }}>{gn(m.player2)}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {(c.bonuses || []).filter(b => b.pts > 0).length > 0 && (
+                <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid rgba(21,152,203,.1)" }}>
+                  <p style={{ fontSize: 9, color: P.amber, fontWeight: 700, letterSpacing: 2, marginBottom: 6 }}>BONUSES AWARDED</p>
+                  {(c.bonuses || []).filter(b => b.pts > 0).map((b, i) => (
+                    <div key={b.id + i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 0", fontSize: 11 }}>
+                      <span style={{ flex: 1 }}>{gn(b.id)}</span>
+                      {editMode
+                        ? <input type="number" min="0" max="5" defaultValue={b.pts} onBlur={e => saveBonusEdit(b.id, e.target.value)} style={{ width: 44, padding: "3px 6px", background: "rgba(0,20,40,.6)", border: "1px solid " + P.gb, borderRadius: 6, color: P.white, fontSize: 11, textAlign: "center" }} />
+                        : <span style={{ fontWeight: 700, color: P.amber }}>+{b.pts}</span>}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ── MATCH LOG TAB ── */}
+          {tab === "matches" && (
+            <div>
+              <div style={{ display: "flex", gap: 4, padding: "4px 0 6px", borderBottom: "1px solid rgba(21,152,203,.2)" }}>
+                <span style={{ width: 44, fontSize: 9, color: P.dim, fontWeight: 700, letterSpacing: 1 }}>TYPE</span>
+                <span style={{ flex: 1, fontSize: 9, color: P.dim, fontWeight: 700, letterSpacing: 1 }}>WINNER</span>
+                <span style={{ width: 42, fontSize: 9, color: P.dim, fontWeight: 700, textAlign: "center", letterSpacing: 1 }}>SCORE</span>
+                <span style={{ flex: 1, fontSize: 9, color: P.dim, fontWeight: 700, textAlign: "right", letterSpacing: 1 }}>LOSER</span>
+                <span style={{ width: 36, fontSize: 9, color: P.dim, fontWeight: 700, textAlign: "right", letterSpacing: 1 }}>DATE</span>
+                {editMode && <span style={{ width: 24 }} />}
+              </div>
+              {allMatches.length === 0 && <p style={{ color: P.dim, fontSize: 12, textAlign: "center", padding: "16px 0" }}>No matches recorded</p>}
+              {allMatches.map(m => {
+                const w1 = m.score1 > m.score2;
+                const winId = w1 ? m.player1 : m.player2;
+                const losId = w1 ? m.player2 : m.player1;
+                const ws = w1 ? m.score1 : m.score2;
+                const ls = w1 ? m.score2 : m.score1;
+                const typeColor = m._type === "Box" ? P.orange : m._type === "WC" ? P.wc : P.blue;
+                const dateStr = m.completedAt ? m.completedAt.slice(5, 10).replace("-", "/") : "";
+                if (editingId === m.id) return (
+                  <div key={m.id} style={{ padding: "8px 0", borderBottom: "1px solid rgba(21,152,203,.08)" }}>
+                    <div style={{ fontSize: 11, color: P.grey, marginBottom: 6 }}>{gn(m.player1)} vs {gn(m.player2)}</div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <input type="number" min="0" max="9" value={eS1} onChange={e => setES1(+e.target.value)} style={{ width: 48, padding: "5px", background: "rgba(0,20,40,.6)", border: "1px solid " + P.gb, borderRadius: 8, color: P.white, fontSize: 14, textAlign: "center" }} />
+                      <span style={{ color: P.dim }}>–</span>
+                      <input type="number" min="0" max="9" value={eS2} onChange={e => setES2(+e.target.value)} style={{ width: 48, padding: "5px", background: "rgba(0,20,40,.6)", border: "1px solid " + P.gb, borderRadius: 8, color: P.white, fontSize: 14, textAlign: "center" }} />
+                      <button onClick={() => saveMatchEdit(m.id, eS1, eS2)} style={{ padding: "5px 12px", background: P.ok, border: "none", borderRadius: 8, color: "#000", fontWeight: 700, fontSize: 11, cursor: "pointer" }}>Save</button>
+                      <button onClick={() => setEditingId(null)} style={{ padding: "5px 10px", background: "transparent", border: "1px solid " + P.dim, borderRadius: 8, color: P.dim, fontSize: 11, cursor: "pointer" }}>✕</button>
+                    </div>
+                  </div>
+                );
+                return (
+                  <div key={m.id} style={{ display: "flex", alignItems: "center", gap: 4, padding: "5px 0", borderBottom: "1px solid rgba(21,152,203,.04)", fontSize: 11 }}>
+                    <span style={{ width: 44, fontSize: 9, color: typeColor, fontWeight: 700, letterSpacing: 0.5 }}>{m._type === "Box" ? (m.boxName || "Box").toUpperCase() : m._type}</span>
+                    <span style={{ flex: 1, fontWeight: 700 }}>{gn(winId)}</span>
+                    <span style={{ width: 42, color: P.orange, fontWeight: 700, textAlign: "center" }}>{ws}–{ls}</span>
+                    <span style={{ flex: 1, color: P.dim, textAlign: "right" }}>{gn(losId)}</span>
+                    <span style={{ width: 36, fontSize: 9, color: P.dim, textAlign: "right" }}>{dateStr}</span>
+                    {editMode && <button onClick={() => { setEditingId(m.id); setES1(m.score1); setES2(m.score2); }} style={{ width: 24, background: "transparent", border: "none", color: P.dim, fontSize: 13, cursor: "pointer", padding: 0 }}>✏</button>}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* ── PLAYERS TAB ── */}
+          {tab === "players" && (
+            <div>
+              <div style={{ display: "flex", gap: 4, padding: "4px 0 6px", borderBottom: "1px solid rgba(21,152,203,.2)" }}>
+                <span style={{ flex: 1, fontSize: 9, color: P.dim, fontWeight: 700, letterSpacing: 1 }}>PLAYER</span>
+                <span style={{ width: 48, fontSize: 9, color: P.dim, fontWeight: 700, textAlign: "right", letterSpacing: 1 }}>MATCH</span>
+                <span style={{ width: 48, fontSize: 9, color: P.dim, fontWeight: 700, textAlign: "right", letterSpacing: 1 }}>BONUS</span>
+                <span style={{ width: 44, fontSize: 9, color: P.amber, fontWeight: 700, textAlign: "right", letterSpacing: 1 }}>TOTAL</span>
+              </div>
+              {playerList.map((p, i) => (
+                <div key={p.id} style={{ display: "flex", alignItems: "center", gap: 4, padding: "5px 0", borderBottom: "1px solid rgba(21,152,203,.04)", fontSize: 11 }}>
+                  <span style={{ flex: 1, fontWeight: i === 0 ? 700 : 400 }}>{gn(p.id)}</span>
+                  <span style={{ width: 48, color: P.grey, textAlign: "right" }}>{p.matchPts}</span>
+                  <span style={{ width: 48, color: p.bonusPts > 0 ? P.amber : P.dim, textAlign: "right" }}>{p.bonusPts > 0 ? "+" + p.bonusPts : "—"}</span>
+                  <span style={{ width: 44, color: P.orange, fontWeight: 700, textAlign: "right" }}>{p.total}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* ── Hidden Override Button ── */}
+          <div style={{ marginTop: 18, textAlign: "right" }}>
+            {!editMode && !editConfirm && (
+              <button onClick={() => setEditConfirm(true)} style={{ background: "none", border: "none", color: "rgba(255,255,255,.12)", fontSize: 10, cursor: "pointer", letterSpacing: 1 }}>⚙ override</button>
+            )}
+            {editConfirm && !editMode && (
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 8 }}>
+                <span style={{ fontSize: 10, color: P.bad }}>Modifies historical data.</span>
+                <button onClick={() => { setEditMode(true); setEditConfirm(false); setTab("matches"); }} style={{ padding: "4px 10px", background: "transparent", border: "1px solid " + P.bad, borderRadius: 7, color: P.bad, fontSize: 10, fontWeight: 700, cursor: "pointer" }}>Unlock</button>
+                <button onClick={() => setEditConfirm(false)} style={{ padding: "4px 8px", background: "transparent", border: "none", color: P.dim, fontSize: 10, cursor: "pointer" }}>Cancel</button>
+              </div>
+            )}
+            {editMode && (
+              <button onClick={() => { setEditMode(false); setEditingId(null); }} style={{ padding: "4px 12px", background: "transparent", border: "1px solid " + P.dim, borderRadius: 7, color: P.dim, fontSize: 10, fontWeight: 700, cursor: "pointer" }}>✓ Done editing</button>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AdminV({ st, ladder, previewCyc, confirmCyc, completeCyc, endEarlyCyc, undoCyc, resetAll, addP, rmP, ffM, gn, save, togCI }) {
+  const [pin, setPin] = useState(""); const [ok, setOk] = useState(false); const [err, setErr] = useState(false);
+  const [cc, setCc] = useState(false); const [cr, setCr] = useState(false); const [cu, setCu] = useState(false); const [randomRound, setRandomRound] = useState(false);
+  const [nm, setNm] = useState(""); const [rmId, setRmId] = useState(null); const [search, setSearch] = useState("");
+  const [showPlayers, setShowPlayers] = useState(true);
+  const [showCheckedIn, setShowCheckedIn] = useState(false);
+  const [showPinChange, setShowPinChange] = useState(false); const [newPinA, setNewPinA] = useState(""); const [newPinB, setNewPinB] = useState(""); const [pinErr, setPinErr] = useState("");
+  // Box preview state (admin adjusts suggested boxes before confirming round start)
+  const [showBoxPreview, setShowBoxPreview] = useState(false);
+  const [previewBoxes, setPreviewBoxes] = useState([]);
+  const [suggestedBoxes, setSuggestedBoxes] = useState([]);
+  const [previewRandomize, setPreviewRandomize] = useState(false);
+  const [swapSrc, setSwapSrc] = useState(null); // { boxIdx, playerId }
+  const [manuallyMoved, setManuallyMoved] = useState(new Set());
+  const [playerReasons, setPlayerReasons] = useState({});
+  const [previewElo, setPreviewElo] = useState({ ratings: {}, played: {}, frac: {} });
+  const daysInCycle = st.cycleStart ? dd(nw(), st.cycleStart) : 0;
+  const pendingMatches = [
+    ...(st.boxMatches || []).filter(m => !m.completed).map(m => ({ ...m, matchType: "Box", label: m.boxName || "Box" })),
+    ...(st.wildCards || []).filter(m => !m.completed).map(m => ({ ...m, matchType: "Wild Card", label: "Wild Card" })),
+  ];
+  const chk = () => { if (pin === (st.adminPin || "5755")) { setOk(true); setErr(false); } else { setErr(true); setPin(""); } };
+  const pend = ((st.boxMatches || []).filter(m => !m.completed).length) + ((st.wildCards || []).filter(m => !m.completed).length);
+  const isRealMatch = m => m.completed && !m.forfeit && !(m.score1 === 0 && m.score2 === 0);
+  const tot = [...(st.boxMatches || []), ...(st.wildCards || []), ...(st.openChallenges || [])].filter(isRealMatch).length + (st.pastCycles || []).reduce((a, c) => [...(c.boxMatches || []), ...(c.wildCards || []), ...(c.openChallenges || [])].filter(isRealMatch).length + a, 0);
+  const filtLad = search.trim() ? ladder.filter(s => s.name.toLowerCase().includes(search.toLowerCase())) : ladder;
+
+  if (!ok) return (<div style={{ paddingTop: 16 }}><Tt>Admin</Tt>
+    <div style={gc}><h4 style={{ fontSize: 15, fontWeight: 600, color: P.white, marginBottom: 10, fontFamily: "Georgia,serif" }}>Enter PIN</h4>
+      <input type="password" inputMode="numeric" maxLength={4} value={pin} onChange={e => setPin(e.target.value.replace(/\D/g, ""))} onKeyDown={e => { if (e.key === "Enter") chk(); }} placeholder="· · · ·" style={{ ...inpS, width: "100%", textAlign: "center", fontSize: 28, letterSpacing: 12, marginBottom: 10 }} />
+      <button onClick={chk} style={{ ...bpS, marginTop: 0 }}>Unlock</button>
+      {err && <p style={{ fontSize: 11, color: P.bad, marginTop: 8, textAlign: "center" }}>Wrong PIN.</p>}</div>
+    <div style={gc}><h4 style={{ fontSize: 15, fontWeight: 600, color: P.white, marginBottom: 10, fontFamily: "Georgia,serif" }}>Stats</h4>
+      <div style={{ display: "flex", gap: 8 }}>{[[st.players.length, "Players"], [st.cycleNumber, "Cycles"], [tot, "Matches"]].map(([n, l]) => (<div key={l} style={{ flex: 1, background: "rgba(0,20,40,.5)", borderRadius: 10, padding: "14px 6px", textAlign: "center", border: "1px solid " + P.gb }}><div style={{ fontSize: 26, fontWeight: 300, color: P.orange, fontFamily: "Georgia,serif" }}>{n}</div><div style={{ fontSize: 9, color: P.dim, letterSpacing: 2, textTransform: "uppercase", marginTop: 2 }}>{l}</div></div>))}</div></div>
+  </div>);
+
+  // Box preview overlay — shown when admin previews/adjusts boxes before starting a round
+  const handleSwap = (boxIdx, playerId) => {
+    if (!swapSrc) { setSwapSrc({ boxIdx, playerId }); return; }
+    if (swapSrc.playerId === playerId) { setSwapSrc(null); return; }
+    if (swapSrc.boxIdx === boxIdx) { setSwapSrc({ boxIdx, playerId }); return; }
+    const nb = previewBoxes.map((b, bi) => {
+      if (bi === swapSrc.boxIdx) return { ...b, players: b.players.map(p => p === swapSrc.playerId ? playerId : p) };
+      if (bi === boxIdx) return { ...b, players: b.players.map(p => p === playerId ? swapSrc.playerId : p) };
+      return b;
+    });
+    const nm = new Set(manuallyMoved); nm.add(swapSrc.playerId); nm.add(playerId);
+    setPreviewBoxes(nb); setManuallyMoved(nm); setSwapSrc(null);
+  };
+  if (showBoxPreview) return (
+    <div style={{ paddingTop: 16, paddingBottom: "max(16px,env(safe-area-inset-bottom))" }}>
+      <Tt>Round {st.cycleNumber + 1} — Box Preview</Tt>
+      {swapSrc && (
+        <div style={{ background: "rgba(21,152,203,.12)", border: "1px solid rgba(21,152,203,.3)", borderRadius: 12, padding: "8px 14px", marginBottom: 10, marginLeft: 16, marginRight: 16 }}>
+          <p style={{ fontSize: 12, color: P.blue, margin: 0 }}>Tap a player in a <strong>different box</strong> to swap with <strong>{gn(swapSrc.playerId)}</strong></p>
+        </div>
+      )}
+      {(() => {
+        const lrMap = {}; ladder.forEach((p, i) => { lrMap[p.id] = { rank: i + 1, points: p.points }; });
+        return previewBoxes.map((box, bi) => (
+          <div key={bi} style={{ ...gc, marginLeft: 16, marginRight: 16 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+              <h4 style={{ fontSize: 11, fontWeight: 700, color: P.blue, letterSpacing: 2, textTransform: "uppercase", margin: 0 }}>{box.name}</h4>
+              <span style={{ fontSize: 10, color: P.dim }}>{box.players.length} players</span>
+            </div>
+            {box.players.map(pid => {
+              const isSrc = swapSrc && swapSrc.playerId === pid;
+              const isMoved = manuallyMoved.has(pid);
+              const r = playerReasons[pid] || {};
+              const lrank = lrMap[pid];
+              const reasonLabel =
+                r.reason === "promoted"  ? "↑ Promoted from Box " + r.fromBox :
+                r.reason === "relegated" ? "↓ Relegated from Box " + r.fromBox :
+                r.reason === "held"      ? "Held · Box " + r.fromBox :
+                r.reason === "returning" ? "Returning from absence" :
+                r.reason === "new"       ? "New player" : null;
+              const reasonColor =
+                r.reason === "promoted"  ? P.ok :
+                r.reason === "relegated" ? P.bad :
+                r.reason === "returning" ? P.blue :
+                r.reason === "new"       ? P.orange : P.dim;
+              return (
+                <div key={pid} onClick={() => handleSwap(bi, pid)} style={{ padding: "8px 10px", borderRadius: 10, marginBottom: 5, background: isSrc ? "rgba(21,152,203,.18)" : "rgba(0,20,40,.45)", border: isSrc ? "1px solid " + P.blue : "1px solid rgba(255,255,255,.07)", cursor: "pointer", transition: "background .15s, border .15s" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <span style={{ flex: 1, fontSize: 13, color: P.off, fontWeight: isSrc ? 700 : 500 }}>{gn(pid)}</span>
+                    {lrank && <span style={{ fontSize: 10, color: P.orange, fontWeight: 700 }}>#{lrank.rank}</span>}
+                    {lrank && <span style={{ fontSize: 10, color: P.dim }}>{lrank.points}pts</span>}
+                    {(previewElo.played[pid] || 0) >= 3 && <span style={{ fontSize: 9, color: (previewElo.frac[pid] || 0) < 0.33 ? P.ok : (previewElo.frac[pid] || 0) > 0.66 ? P.bad : P.dim, fontWeight: 600 }}>ELO {Math.round(previewElo.ratings[pid] || 1000)}</span>}
+                    {isMoved && <span style={{ fontSize: 9, color: P.orange, fontWeight: 700, background: "rgba(241,138,0,.15)", border: "1px solid rgba(241,138,0,.3)", borderRadius: 4, padding: "1px 5px" }}>MOVED</span>}
+                    <span style={{ fontSize: 13, color: isSrc ? P.blue : P.dim }}>⇄</span>
+                  </div>
+                  {(reasonLabel || r.lastRecord) && (
+                    <div style={{ display: "flex", justifyContent: "space-between", marginTop: 3 }}>
+                      {reasonLabel && <span style={{ fontSize: 10, color: reasonColor }}>{reasonLabel}</span>}
+                      {r.lastRecord && <span style={{ fontSize: 10, color: P.dim, marginLeft: "auto" }}>{r.lastRecord}</span>}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        ));
+      })()}
+      <div style={{ padding: "0 16px", display: "flex", flexDirection: "column", gap: 4 }}>
+        <button onClick={() => { confirmCyc(previewBoxes, previewRandomize, manuallyMoved); setShowBoxPreview(false); setSwapSrc(null); setManuallyMoved(new Set()); }} style={{ ...bpS, marginTop: 0, background: "linear-gradient(135deg," + P.amber + ",#F59E0B)", color: P.navy }}>Start Round {st.cycleNumber + 1}</button>
+        <button onClick={() => { setPreviewBoxes(suggestedBoxes.map(b => ({ ...b, players: [...b.players] }))); setManuallyMoved(new Set()); setSwapSrc(null); }} style={{ ...bcS, color: P.blue }}>Reset to Suggested</button>
+        <button onClick={() => { setShowBoxPreview(false); setSwapSrc(null); setManuallyMoved(new Set()); }} style={bcS}>Cancel</button>
+      </div>
+    </div>
+  );
+
+  return (<div style={{ paddingTop: 16 }}><Tt>Admin <span style={{ fontSize: 11, color: P.ok }}>{"\ud83d\udd13"}</span></Tt>
+    <div style={gc}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: showPlayers ? 8 : 0 }}>
+        <h4 style={{ fontSize: 15, fontWeight: 600, color: P.white, fontFamily: "Georgia,serif" }}>Players ({st.players.length})</h4>
+        <button onClick={() => setShowPlayers(v => !v)} style={{ background: "none", border: "none", color: P.dim, fontSize: 14, cursor: "pointer" }}>{showPlayers ? "\u25bc" : "\u25b6"}</button>
+      </div>
+      {showPlayers && <div>
+        <div style={{ display: "flex", gap: 6, marginBottom: 8 }}><input value={nm} onChange={e => setNm(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && nm.trim()) { addP(nm); setNm(""); } }} placeholder="New player..." style={inpS} /><button onClick={() => { if (nm.trim()) { addP(nm); setNm(""); } }} style={{ padding: "10px 18px", background: "linear-gradient(135deg," + P.orange + "," + P.amber + ")", color: P.navy, border: "none", borderRadius: 10, fontWeight: 700, cursor: "pointer" }}>Add</button></div>
+        <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search..." style={{ ...inpS, width: "100%", marginBottom: 8, flex: "none", fontSize: 12 }} />
+        <div style={{ maxHeight: 250, overflowY: "auto" }}>{filtLad.map((s, i) => (
+          <div key={s.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 4px", borderBottom: "1px solid rgba(21,152,203,.06)" }}>
+            <span style={{ fontSize: 11, color: P.orange, fontWeight: 700, width: 24 }}>#{ladder.indexOf(s) + 1}</span>
+            <span style={{ flex: 1, fontSize: 13 }}>{s.name}</span>
+            <span style={{ fontSize: 10, color: P.dim }}>{s.points}pts</span>
+            {rmId === s.id ? (<div style={{ display: "flex", gap: 3 }}><button onClick={() => { rmP(s.id); setRmId(null); }} style={{ padding: "3px 8px", background: P.bad, color: "#fff", border: "none", borderRadius: 6, fontSize: 10, fontWeight: 700, cursor: "pointer" }}>Remove</button><button onClick={() => setRmId(null)} style={{ padding: "3px 8px", background: P.mid, color: P.grey, border: "none", borderRadius: 6, fontSize: 10, cursor: "pointer" }}>Keep</button></div>) : <button onClick={() => setRmId(s.id)} style={{ background: "transparent", border: "none", color: P.dim, fontSize: 16, cursor: "pointer" }}>{"\u00d7"}</button>}
+          </div>))}</div>
+      </div>}
+    </div>
+
+    <div style={gc}><h4 style={{ fontSize: 15, fontWeight: 600, color: P.white, marginBottom: 6, fontFamily: "Georgia,serif" }}>Round Duration</h4>
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <input type="number" min="1" max="12" value={st.cycleDurationWeeks || 4} onChange={e => save({ ...st, cycleDurationWeeks: Math.max(1, Math.min(12, +e.target.value || 1)) })} style={{ ...ssS, width: 70, marginBottom: 0, textAlign: "center" }} />
+        <span style={{ fontSize: 12, color: P.grey }}>weeks per round</span>
+      </div>
+    </div>
+
+    {(() => {
+      const roundActive = st.cycleNumber > 0 && (st.boxes||[]).length > 0;
+      const allDone = roundActive && (st.boxMatches||[]).every(m => m.completed) && (st.wildCards||[]).every(m => m.completed);
+      const cycleComplete = st.cycleNumber > 0 && (st.boxes||[]).length === 0;
+      const noRound = !st.cycleNumber || cycleComplete;
+      return (
+        <div style={gc}><h4 style={{ fontSize: 15, fontWeight: 600, color: P.white, marginBottom: 6, fontFamily: "Georgia,serif" }}>Rounds</h4>
+          <p style={{ fontSize: 12, color: P.grey, marginBottom: 10 }}>
+            {!st.cycleNumber ? "No active round." : cycleComplete ? "Round " + st.cycleNumber + " complete. Ready for next." : allDone ? "Round " + st.cycleNumber + " — all matches done!" : "Round " + st.cycleNumber + " · " + pend + " pending · " + st.checkedIn.length + " signed up for next"}
+          </p>
+          {st.checkedIn.length > 0 && (() => {
+            const N = st.checkedIn.length;
+            let suggestion;
+            if (N < 4) suggestion = "Need 4+ players to start";
+            else if (N % 4 === 0) suggestion = (N / 4) + " box" + (N / 4 !== 1 ? "es" : "") + " of 4 — perfect fit";
+            else if (N % 4 === 1) suggestion = (Math.floor(N / 4) - 1) + " boxes of 4 + swing of 5 (or remove 1)";
+            else if (N % 4 === 2) suggestion = Math.floor(N / 4) + " box" + (Math.floor(N / 4) !== 1 ? "es" : "") + " of 4 + swing of 6";
+            else suggestion = Math.floor(N / 4) + " box" + (Math.floor(N / 4) !== 1 ? "es" : "") + " of 4 + swing of 3";
+            const ciElo = calcElo(st.players, st);
+            const bwIds = new Set([...(st.boxMatches || []), ...(st.wildCards || [])].filter(m => m.completed && !m.forfeit).flatMap(m => [m.player1, m.player2]));
+            const acIds = new Set([...(st.boxMatches || []), ...(st.wildCards || []), ...(st.openChallenges || [])].filter(m => m.completed && !m.forfeit).flatMap(m => [m.player1, m.player2]));
+            return (
+              <div style={{ marginBottom: 10 }}>
+                <div onClick={() => setShowCheckedIn(v => !v)} style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", marginBottom: 4 }}>
+                  <span style={{ fontSize: 9, fontWeight: 700, color: P.dim }}>{showCheckedIn ? "▼" : "▶"}</span>
+                  <span style={{ fontSize: 11, fontWeight: 700, color: P.grey }}>SIGNED UP ({N})</span>
+                  <span style={{ fontSize: 10, color: N < 4 ? P.bad : P.dim, marginLeft: "auto" }}>{suggestion}</span>
+                </div>
+                {showCheckedIn && (
+                  <div style={{ background: "rgba(0,20,40,.4)", borderRadius: 10, padding: "6px 10px" }}>
+                    {st.checkedIn.map(id => {
+                      const elo = (ciElo.played[id] || 0) >= 3 ? Math.round(ciElo.ratings[id] || 1000) : null;
+                      const isRet = bwIds.has(id);
+                      const isNew = !acIds.has(id);
+                      return (
+                        <div key={id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "5px 0", borderBottom: "1px solid rgba(21,152,203,.06)" }}>
+                          {isRet && <span style={{ fontSize: 8, color: P.ok, fontWeight: 700, background: "rgba(52,211,153,.12)", border: "1px solid rgba(52,211,153,.35)", borderRadius: 4, padding: "1px 5px" }}>RETURNING</span>}
+                          {!isRet && isNew && <span style={{ fontSize: 8, color: P.orange, fontWeight: 700, background: "rgba(241,138,0,.15)", border: "1px solid rgba(241,138,0,.3)", borderRadius: 4, padding: "1px 5px" }}>NEW</span>}
+                          <span style={{ flex: 1, fontSize: 12, color: P.off }}>{gn(id)}</span>
+                          {elo && <span style={{ fontSize: 10, color: P.dim, fontWeight: 600 }}>{elo}</span>}
+                          <button onClick={() => togCI(id)} style={{ background: "transparent", border: "1px solid " + P.bad, borderRadius: 6, color: P.bad, fontSize: 10, fontWeight: 700, padding: "2px 8px", cursor: "pointer" }}>Remove</button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+          {(() => {
+            if (roundActive && !allDone) return cc ? (
+              <div>
+                <div style={{ background: "rgba(248,113,113,.08)", border: "1px solid rgba(248,113,113,.25)", borderRadius: 10, padding: "10px 12px", marginBottom: 10 }}>
+                  <p style={{ fontSize: 11, color: P.bad, fontWeight: 700, marginBottom: 6 }}>⚠ {pend} match{pend !== 1 ? "es" : ""} will be marked not played:</p>
+                  {pendingMatches.map(m => <p key={m.id} style={{ fontSize: 11, color: P.grey, margin: "2px 0" }}>• {gn(m.player1)} vs {gn(m.player2)} <span style={{ color: P.dim }}>({m.label})</span></p>)}
+                </div>
+                <button onClick={() => { endEarlyCyc(); setCc(false); }} style={{ ...bpS, background: "linear-gradient(135deg,#F87171,#EF4444)", marginTop: 0 }}>Confirm — End Round {st.cycleNumber}</button>
+                <button onClick={() => setCc(false)} style={bcS}>Cancel</button>
+              </div>
+            ) : <div><button onClick={() => setCc(true)} style={{ ...bpS, background: "linear-gradient(135deg," + P.orange + ",#F87171)" }}>End Round {st.cycleNumber} Early</button><p style={{ fontSize: 9, color: P.dim, textAlign: "center", marginTop: 4 }}>Forfeit {pend} remaining match{pend !== 1 ? "es" : ""} and archive results</p></div>;
+
+            if (roundActive && allDone) return cc ? (
+              <div>
+                <p style={{ fontSize: 11, color: P.ok, marginBottom: 8 }}>✓ All matches done — archive Round {st.cycleNumber}?</p>
+                <button onClick={() => { completeCyc(); setCc(false); }} style={{ ...bpS, background: "linear-gradient(135deg,#34D399,#059669)", marginTop: 0 }}>Confirm — Complete Round {st.cycleNumber}</button>
+                <button onClick={() => setCc(false)} style={bcS}>Cancel</button>
+              </div>
+            ) : (
+              <div style={{ background: "rgba(52,211,153,.08)", border: "1px solid rgba(52,211,153,.25)", borderRadius: 12, padding: "10px 14px" }}>
+                <p style={{ fontSize: 12, color: P.ok, fontWeight: 700, marginBottom: 8 }}>✓ All matches complete</p>
+                <button onClick={() => setCc(true)} style={{ ...bpS, background: "linear-gradient(135deg,#34D399,#059669)", marginTop: 0 }}>Complete Round {st.cycleNumber}</button>
+                <p style={{ fontSize: 9, color: P.dim, textAlign: "center", marginTop: 4 }}>Archive results and prepare for next round</p>
+              </div>
+            );
+
+            if (noRound) {
+              if (st.checkedIn.length < 4) return <p style={{ fontSize: 11, color: P.bad }}>Need 4+ signed up to start ({st.checkedIn.length} so far)</p>;
+              const openPreview = () => {
+                const data = previewCyc(randomRound);
+                if (!data) return;
+                setPreviewBoxes(data.suggestedBoxes.map(b => ({ ...b, players: [...b.players] })));
+                setSuggestedBoxes(data.suggestedBoxes.map(b => ({ ...b, players: [...b.players] })));
+                setPreviewRandomize(data.randomize);
+                setManuallyMoved(new Set());
+                setSwapSrc(null);
+                setPlayerReasons(data.playerReasons || {});
+                setPreviewElo({ ratings: data.eloRatings || {}, played: data.eloPlayed || {}, frac: data.eloFrac || {} });
+                setShowBoxPreview(true);
+                setCc(false);
+                setRandomRound(false);
+              };
+              return (
+                <div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+                    <input type="checkbox" id="rndRound" checked={randomRound} onChange={e => setRandomRound(e.target.checked)} style={{ width: 16, height: 16, accentColor: P.orange, cursor: "pointer" }} />
+                    <label htmlFor="rndRound" style={{ fontSize: 12, color: P.grey, cursor: "pointer" }}>Randomize boxes <span style={{ color: P.dim, fontSize: 10 }}>(ignore seeding)</span></label>
+                  </div>
+                  <button onClick={openPreview} style={{ ...bpS, background: "linear-gradient(135deg," + P.amber + ",#F59E0B)", color: P.navy }}>Preview Boxes for Round {st.cycleNumber + 1}</button>
+                </div>
+              );
+            }
+            return null;
+          })()}
+        </div>
+      );
+    })()}
+
+    {st.cycleNumber > 0 && (st.boxes||[]).length > 0 && <div style={gc}><h4 style={{ fontSize: 15, fontWeight: 600, color: P.white, marginBottom: 6, fontFamily: "Georgia,serif" }}>Undo</h4>
+      {cu ? <div><p style={{ fontSize: 11, color: P.bad, marginBottom: 6 }}>Delete Round {st.cycleNumber}?</p><button onClick={() => { undoCyc(); setCu(false); }} style={{ ...bpS, background: P.amber, color: P.navy }}>Yes</button><button onClick={() => setCu(false)} style={bcS}>Cancel</button></div>
+        : <div><button onClick={() => setCu(true)} style={{ ...bpS, background: "transparent", border: "1px solid " + P.amber, color: P.amber }}>Undo Round {st.cycleNumber}</button><p style={{ fontSize: 9, color: P.dim, textAlign: "center", marginTop: 4 }}>Restore round and un-forfeit auto-forfeited matches</p></div>}</div>}
+
+    {(st.pastCycles || []).length > 0 && (() => {
+      const lastC = st.pastCycles[st.pastCycles.length - 1];
+      const rBM = (lastC.boxMatches || []).filter(m => m.completed && !m.forfeit);
+      const rWC = (lastC.wildCards || []).filter(m => m.completed && !m.forfeit);
+      const rOC = (lastC.openChallenges || []).filter(m => m.completed && !m.forfeit);
+      const pTot = {};
+      const ep = id => { if (!pTot[id]) pTot[id] = { id, pts: 0 }; };
+      [...rBM, ...rWC].forEach(m => { ep(m.player1); ep(m.player2); if (m.score1 > m.score2) { pTot[m.player1].pts += m.score2 === 0 ? 5 : 4; if (m.score2 > 0) pTot[m.player2].pts += 2; } else { pTot[m.player2].pts += m.score1 === 0 ? 5 : 4; if (m.score1 > 0) pTot[m.player1].pts += 2; } });
+      rOC.forEach(m => { ep(m.player1); ep(m.player2); if (m.score1 > m.score2) pTot[m.player1].pts += 2; else pTot[m.player2].pts += 2; });
+      (lastC.bonuses || []).forEach(b => { ep(b.id); pTot[b.id].pts += b.pts; });
+      const sorted = Object.values(pTot).sort((a, b) => b.pts - a.pts);
+      const topScorer = sorted[0];
+      const shutouts = [...rBM, ...rWC, ...rOC].filter(m => (m.score1 === 2 && m.score2 === 0) || (m.score2 === 2 && m.score1 === 0)).length;
+      const box1 = (lastC.boxes || []).find(b => !b.isSwing);
+      const box1Idx = box1 ? lastC.boxes.indexOf(box1) : -1;
+      const box1BM = box1Idx >= 0 ? (lastC.boxMatches || []).filter(m => m.box === box1Idx) : [];
+      const champ = box1 ? boxSt(box1.players, box1BM)[0] : null;
+      const totalPlayed = rBM.length + rWC.length + rOC.length;
+      return (
+        <div style={{ ...gc, background: "linear-gradient(135deg, rgba(241,138,0,.1), rgba(21,152,203,.06))", borderColor: "rgba(241,138,0,.25)" }}>
+          <h4 style={{ fontSize: 15, fontWeight: 600, color: P.orange, fontFamily: "Georgia,serif", marginBottom: 4 }}>Round {lastC.cycle} Summary</h4>
+          <p style={{ fontSize: 10, color: P.dim, marginBottom: 10 }}>{fmtDate(lastC.startedAt)}</p>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+            {lastC.randomized ? (
+              <div style={{ flex: "0 0 100%", background: "rgba(0,20,40,.4)", borderRadius: 10, padding: "10px 12px", border: "1px solid rgba(196,161,255,.25)" }}>
+                <p style={{ fontSize: 9, color: P.wc, fontWeight: 700, letterSpacing: 1, marginBottom: 6 }}>🎲 BOX WINNERS</p>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: "4px 14px" }}>
+                  {(lastC.boxes || []).map((box, bi) => { const bm = (lastC.boxMatches || []).filter(m => m.box === bi); const winner = boxSt(box.players, bm)[0]; return winner ? (<div key={bi} style={{ display: "flex", alignItems: "baseline", gap: 5 }}><span style={{ fontSize: 9, color: P.dim, fontWeight: 700 }}>{box.name}:</span><span style={{ fontSize: 12, color: P.white, fontWeight: 600 }}>{gn(winner.id)}</span></div>) : null; })}
+                </div>
+              </div>
+            ) : (
+              champ && <div style={{ flex: 1, minWidth: 100, background: "rgba(0,20,40,.4)", borderRadius: 10, padding: "10px 12px", border: "1px solid rgba(241,138,0,.2)" }}>
+                <p style={{ fontSize: 9, color: P.orange, fontWeight: 700, letterSpacing: 1, marginBottom: 4 }}>🏆 CHAMPION</p>
+                <p style={{ fontSize: 13, color: P.white, fontWeight: 600 }}>{gn(champ.id)}</p>
+              </div>
+            )}
+            {topScorer && <div style={{ flex: 1, minWidth: 100, background: "rgba(0,20,40,.4)", borderRadius: 10, padding: "10px 12px", border: "1px solid rgba(21,152,203,.2)" }}>
+              <p style={{ fontSize: 9, color: P.blue, fontWeight: 700, letterSpacing: 1, marginBottom: 4 }}>⭐ TOP SCORER</p>
+              <p style={{ fontSize: 13, color: P.white, fontWeight: 600 }}>{gn(topScorer.id)} <span style={{ color: P.orange, fontSize: 11 }}>{topScorer.pts}pts</span></p>
+            </div>}
+            <div style={{ flex: 1, minWidth: 80, background: "rgba(0,20,40,.4)", borderRadius: 10, padding: "10px 12px", border: "1px solid rgba(255,255,255,.08)" }}>
+              <p style={{ fontSize: 9, color: P.dim, fontWeight: 700, letterSpacing: 1, marginBottom: 4 }}>🎱 MATCHES</p>
+              <p style={{ fontSize: 13, color: P.off, fontWeight: 600 }}>{totalPlayed}</p>
+            </div>
+            <div style={{ flex: 1, minWidth: 80, background: "rgba(0,20,40,.4)", borderRadius: 10, padding: "10px 12px", border: "1px solid rgba(255,255,255,.08)" }}>
+              <p style={{ fontSize: 9, color: P.dim, fontWeight: 700, letterSpacing: 1, marginBottom: 4 }}>⚡ SHUTOUTS</p>
+              <p style={{ fontSize: 13, color: P.off, fontWeight: 600 }}>{shutouts}</p>
+            </div>
+          </div>
+        </div>
+      );
+    })()}
+
+    {(st.pastCycles || []).length > 0 && (
+      <div style={gc}>
+        <h4 style={{ fontSize: 15, fontWeight: 600, color: P.white, fontFamily: "Georgia,serif", marginBottom: 10 }}>Past Rounds</h4>
+        {[...(st.pastCycles || [])].reverse().map((c, revIdx) => {
+          const cycleIdx = st.pastCycles.length - 1 - revIdx;
+          const saveCycle = (idx, updated) => save(withLog({ ...st, pastCycles: st.pastCycles.map((x, i) => i === idx ? updated : x) }, "CYCLE_OVERRIDE", "Round " + updated.cycle));
+          return <PastCycleRow key={c.cycle} c={c} gn={gn} cycleIdx={cycleIdx} saveCycle={saveCycle} />;
+        })}
+      </div>
+    )}
+
+    {(() => {
+      const date = new Date().toISOString().slice(0, 10);
+      const dl = (content, filename, type) => { const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([content], { type })); a.download = filename; a.click(); URL.revokeObjectURL(a.href); };
+      const exportJSON = () => dl(JSON.stringify(st, null, 2), `dra-pool-backup-${date}.json`, "application/json");
+      const exportCSV = () => { const elo = calcElo(st.players, st); const rows = [["Rank","Name","Points","Box Pts","Open Pts","Wins","Losses","Racks Won","Racks Lost","ELO"]]; ladder.forEach((s, i) => rows.push([i+1, s.name, s.points, s.boxPts, s.openPts, s.wins, s.losses, s.rw, s.rl, elo.ratings[s.id] || 1000])); dl(rows.map(r => r.join(",")).join("\n"), `dra-pool-standings-${date}.csv`, "text/csv"); };
+      return (
+        <div style={gc}>
+          <h4 style={{ fontSize: 15, fontWeight: 600, color: P.white, fontFamily: "Georgia,serif", marginBottom: 6 }}>Export Data</h4>
+          <p style={{ fontSize: 11, color: P.grey, marginBottom: 10 }}>Download a backup in case of issues.</p>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={exportJSON} style={{ ...bpS, flex: 1, marginTop: 0 }}>JSON Backup</button>
+            <button onClick={exportCSV} style={{ ...bpS, flex: 1, marginTop: 0, background: "linear-gradient(135deg," + P.blue + ",#0e7aad)" }}>Standings CSV</button>
+          </div>
+        </div>
+      );
+    })()}
+
+    {pendingMatches.length > 0 && (
+      <div style={gc}>
+        <h4 style={{ fontSize: 15, fontWeight: 600, color: P.amber, fontFamily: "Georgia,serif", marginBottom: 6 }}>Pending Matches ({pendingMatches.length})</h4>
+        {daysInCycle > 0 && <p style={{ fontSize: 11, color: P.grey, marginBottom: 10 }}>Round in progress for {Math.floor(daysInCycle)} day{Math.floor(daysInCycle) !== 1 ? "s" : ""}. {daysInCycle >= 7 ? "These are overdue." : ""}</p>}
+        {pendingMatches.map(m => (
+          <div key={m.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 0", borderBottom: "1px solid rgba(21,152,203,.06)" }}>
+            <span style={{ fontSize: 9, fontWeight: 700, color: daysInCycle >= 7 ? P.bad : P.amber, width: 52, letterSpacing: 1 }}>{m.label.toUpperCase()}</span>
+            <span style={{ flex: 1, fontSize: 12 }}>{gn(m.player1)} <span style={{ color: P.dim }}>vs</span> {gn(m.player2)}</span>
+            <button onClick={() => ffM(m.id, m.matchType === "Box" ? "boxMatches" : "wildCards")} style={{ padding: "4px 10px", background: "transparent", border: "1px solid " + P.dim, borderRadius: 7, color: P.dim, fontSize: 10, fontWeight: 700, cursor: "pointer" }}>Forfeit</button>
+          </div>
+        ))}
+      </div>
+    )}
+
+    <div style={gc}><h4 style={{ fontSize: 15, fontWeight: 600, color: P.white, fontFamily: "Georgia,serif", marginBottom: 8 }}>Admin PIN</h4>
+      {!showPinChange ? (
+        <button onClick={() => { setShowPinChange(true); setNewPinA(""); setNewPinB(""); setPinErr(""); }} style={{ ...bpS, background: "transparent", border: "1px solid " + P.dim, color: P.grey, marginTop: 0 }}>Change PIN</button>
+      ) : (
+        <div>
+          <input type="password" inputMode="numeric" maxLength={4} value={newPinA} onChange={e => setNewPinA(e.target.value.replace(/\D/g, ""))} placeholder="New PIN (4 digits)" style={{ ...inpS, width: "100%", marginBottom: 8 }} />
+          <input type="password" inputMode="numeric" maxLength={4} value={newPinB} onChange={e => setNewPinB(e.target.value.replace(/\D/g, ""))} placeholder="Confirm PIN" style={{ ...inpS, width: "100%", marginBottom: 8 }} />
+          {pinErr && <p style={{ fontSize: 11, color: P.bad, marginBottom: 8 }}>{pinErr}</p>}
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={() => { if (newPinA.length !== 4) { setPinErr("PIN must be 4 digits."); return; } if (newPinA !== newPinB) { setPinErr("PINs don't match."); return; } save(withLog({ ...st, adminPin: newPinA }, "PIN_CHANGED", "Admin PIN updated")); setShowPinChange(false); setPinErr(""); }} style={{ ...bpS, marginTop: 0 }}>Save PIN</button>
+            <button onClick={() => setShowPinChange(false)} style={bcS}>Cancel</button>
+          </div>
+        </div>
+      )}
+    </div>
+
+    <div style={{ ...gc, borderColor: "rgba(248,113,113,.2)" }}><h4 style={{ fontSize: 15, fontWeight: 600, color: P.bad, fontFamily: "Georgia,serif" }}>Danger Zone</h4>
+      {cr ? <div><p style={{ fontSize: 11, color: P.bad, marginBottom: 8 }}>Delete ALL?</p><button onClick={() => { resetAll(); setCr(false); }} style={{ ...bpS, background: P.bad, color: "#fff" }}>Yes</button><button onClick={() => setCr(false)} style={bcS}>Cancel</button></div>
+        : <button onClick={() => setCr(true)} style={{ ...bpS, background: "transparent", border: "1px solid " + P.bad, color: P.bad }}>Reset League</button>}</div>
+
+    {/* League Announcement */}
+    <div style={gc}>
+      <h4 style={{ fontSize: 15, fontWeight: 600, color: P.white, fontFamily: "Georgia,serif", marginBottom: 10 }}>League Announcement</h4>
+      {st.announcement && st.announcement.text && <p style={{ fontSize: 11, color: P.off, marginBottom: 8, padding: "6px 10px", background: "rgba(255,173,51,.08)", borderRadius: 8 }}>📢 {st.announcement.text}</p>}
+      <div style={{ display: "flex", gap: 6 }}>
+        <input id="announceTxt" placeholder="Type announcement..." style={inpS} defaultValue={st.announcement?.text || ""} />
+        <button onClick={() => { const txt = document.getElementById("announceTxt").value.trim(); save(withLog({ ...st, announcement: txt ? { text: txt, createdAt: nw() } : null }, "ANNOUNCEMENT", txt || "cleared")); }} style={{ ...bpS, width: "auto", marginTop: 0, padding: "8px 14px", whiteSpace: "nowrap" }}>{st.announcement?.text ? "Update" : "Post"}</button>
+        {st.announcement?.text && <button onClick={() => save(withLog({ ...st, announcement: null }, "ANNOUNCEMENT", "cleared"))} style={{ ...bcS, width: "auto", marginTop: 0, padding: "8px 10px", color: P.bad }}>Clear</button>}
+      </div>
+    </div>
+
+    {(st.auditLog || []).length > 0 && (() => {
+      const allEntries = [...(st.auditLog || [])].reverse();
+      const filtered = search.trim() ? allEntries.filter(e => (e.action + " " + (e.details || "")).toLowerCase().includes(search.toLowerCase())) : allEntries;
+      return (
+      <div style={gc}>
+        <h4 style={{ fontSize: 15, fontWeight: 600, color: P.white, fontFamily: "Georgia,serif", marginBottom: 10 }}>Audit Log</h4>
+        <input placeholder="Search log..." value={search} onChange={e => setSearch(e.target.value)} style={{ ...inpS, marginBottom: 8, fontSize: 12 }} />
+        {search.trim() && <p style={{ fontSize: 9, color: P.dim, marginBottom: 4 }}>Showing {filtered.length} of {allEntries.length} entries</p>}
+        <div style={{ maxHeight: 300, overflowY: "auto" }}>
+          {filtered.slice(0, 50).map(e => (
+            <div key={e.id} style={{ padding: "6px 0", borderBottom: "1px solid rgba(21,152,203,.06)", display: "flex", gap: 8, alignItems: "baseline" }}>
+              <span style={{ fontSize: 9, color: P.dim, whiteSpace: "nowrap" }}>{new Date(e.ts).toLocaleDateString()} {new Date(e.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
+              <span style={{ fontSize: 10, color: P.blue, fontWeight: 700, whiteSpace: "nowrap" }}>{e.action}</span>
+              {e.details && <span style={{ fontSize: 10, color: P.grey }}>{e.details}</span>}
+            </div>
+          ))}
+        </div>
+      </div>);
+    })()}
+  </div>);
+}
+
+
+ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(App));
+</script>
+</body>
+</html>
