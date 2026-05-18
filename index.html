@@ -1417,33 +1417,20 @@ function AdminV({ st, ladder, previewCyc, confirmCyc, completeCyc, endEarlyCyc, 
               const isMoved = manuallyMoved.has(pid);
               const r = playerReasons[pid] || {};
               const lrank = lrMap[pid];
-              const reasonLabel =
-                r.reason === "promoted"  ? "↑ Promoted from Box " + r.fromBox :
-                r.reason === "relegated" ? "↓ Relegated from Box " + r.fromBox :
-                r.reason === "held"      ? "Held · Box " + r.fromBox :
-                r.reason === "returning" ? "Returning from absence" :
-                r.reason === "new"       ? "New player" : null;
-              const reasonColor =
-                r.reason === "promoted"  ? P.ok :
-                r.reason === "relegated" ? P.bad :
-                r.reason === "returning" ? P.blue :
-                r.reason === "new"       ? P.orange : P.dim;
+              // In the random-groups format, only "NEW" is a meaningful label.
+              // Returning players don't need a badge — groups are randomized every round.
+              const isNew = r.reason === "new";
               return (
                 <div key={pid} onClick={() => handleSwap(bi, pid)} style={{ padding: "8px 10px", borderRadius: 10, marginBottom: 5, background: isSrc ? "rgba(21,152,203,.18)" : "rgba(0,20,40,.45)", border: isSrc ? "1px solid " + P.blue : "1px solid rgba(255,255,255,.07)", cursor: "pointer", transition: "background .15s, border .15s" }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                     <span style={{ flex: 1, fontSize: 13, color: P.off, fontWeight: isSrc ? 700 : 500 }}>{gn(pid)}</span>
+                    {isNew && <span style={{ fontSize: 9, color: P.orange, fontWeight: 700, background: "rgba(241,138,0,.15)", border: "1px solid rgba(241,138,0,.3)", borderRadius: 4, padding: "1px 5px" }}>NEW</span>}
                     {lrank && <span style={{ fontSize: 10, color: P.orange, fontWeight: 700 }}>#{lrank.rank}</span>}
                     {lrank && <span style={{ fontSize: 10, color: P.dim }}>{lrank.points}pts</span>}
                     {(previewElo.played[pid] || 0) >= 3 && <span style={{ fontSize: 9, color: (previewElo.frac[pid] || 0) < 0.33 ? P.ok : (previewElo.frac[pid] || 0) > 0.66 ? P.bad : P.dim, fontWeight: 600 }}>ELO {Math.round(previewElo.ratings[pid] || 1000)}</span>}
-                    {isMoved && <span style={{ fontSize: 9, color: P.orange, fontWeight: 700, background: "rgba(241,138,0,.15)", border: "1px solid rgba(241,138,0,.3)", borderRadius: 4, padding: "1px 5px" }}>MOVED</span>}
+                    {isMoved && <span style={{ fontSize: 9, color: P.blue, fontWeight: 700, background: "rgba(21,152,203,.15)", border: "1px solid rgba(21,152,203,.3)", borderRadius: 4, padding: "1px 5px" }}>MOVED</span>}
                     <span style={{ fontSize: 13, color: isSrc ? P.blue : P.dim }}>⇄</span>
                   </div>
-                  {(reasonLabel || r.lastRecord) && (
-                    <div style={{ display: "flex", justifyContent: "space-between", marginTop: 3 }}>
-                      {reasonLabel && <span style={{ fontSize: 10, color: reasonColor }}>{reasonLabel}</span>}
-                      {r.lastRecord && <span style={{ fontSize: 10, color: P.dim, marginLeft: "auto" }}>{r.lastRecord}</span>}
-                    </div>
-                  )}
                 </div>
               );
             })}
