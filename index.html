@@ -470,8 +470,8 @@ function App() {
   const completedRounds = (st.pastCycles || []).length;
   const bracketUnlocked = completedRounds >= seedingRoundsNeeded;
   const tabs = SPECTATOR
-    ? [["home", "\ud83c\udfc6"], ["boxes", "\ud83d\udcca"], ["matches", "\ud83c\udfb1"], ["bracket", "\ud83c\udfaf"], ["rules", "\ud83d\udcd6"]]
-    : [["home", "\ud83c\udfc6"], ["boxes", "\ud83d\udcca"], ["matches", "\ud83c\udfb1"], ["bracket", "\ud83c\udfaf"], ["checkin", "\u2705"], ["rules", "\ud83d\udcd6"]];
+    ? [["home", "\ud83c\udfc6"], ["boxes", "\ud83d\udcca"], ["matches", "\ud83c\udfb1"], ["bracket", "\ud83d\udc51"], ["rules", "\ud83d\udcd6"]]
+    : [["home", "\ud83c\udfc6"], ["boxes", "\ud83d\udcca"], ["matches", "\ud83c\udfb1"], ["bracket", "\ud83d\udc51"], ["checkin", "\u2705"], ["rules", "\ud83d\udcd6"]];
 
   return (
     <div onTouchStart={onTouchStart} onTouchEnd={onTouchEnd} style={{ minHeight: "100vh", background: P.navy, color: P.off, fontFamily: "'DM Sans',Helvetica,sans-serif" }}>
@@ -536,7 +536,7 @@ function App() {
             return (
               <button key={v} onClick={() => { if (v === "bracket" && !bracketUnlocked) { flash("Bracket unlocks after " + seedingRoundsNeeded + " rounds (" + completedRounds + "/" + seedingRoundsNeeded + " done)"); return; } setView(v); setNavIdx(i); setTappedTab(i); setTimeout(() => setTappedTab(null), 420); }} style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "6px 4px 5px", background: "none", border: "none", cursor: "pointer", position: "relative", flex: 1, minHeight: 52, opacity: (v === "bracket" && !bracketUnlocked) ? 0.4 : 1 }}>
                 {isTapped && <span style={{ position: "absolute", top: "50%", left: "50%", width: 36, height: 36, borderRadius: "50%", background: "radial-gradient(circle, rgba(241,138,0,.5) 0%, transparent 70%)", animation: "glowBurst .42s ease-out forwards", pointerEvents: "none" }} />}
-                <span style={{ fontSize: isActive ? 22 : 19, lineHeight: 1, animation: isTapped ? "navBounce .42s cubic-bezier(.34,1.56,.64,1)" : "none", display: "block", position: "relative" }}>{ic}{v === "bracket" && !bracketUnlocked && <span style={{ position: "absolute", top: -2, right: -8, fontSize: 10 }}>\ud83d\udd12</span>}</span>
+                <span style={{ fontSize: isActive ? 22 : 19, lineHeight: 1, animation: isTapped ? "navBounce .42s cubic-bezier(.34,1.56,.64,1)" : "none", display: "block", position: "relative" }}>{ic}{v === "bracket" && !bracketUnlocked && <span style={{ position: "absolute", top: -2, right: -8, fontSize: 10 }}>🔒</span>}</span>
                 {isActive && <span style={{ fontSize: 8, fontWeight: 700, letterSpacing: .8, textTransform: "uppercase", color: P.orange, marginTop: 2, animation: "fadeIn .2s" }}>{label}</span>}
               </button>
             );
@@ -1253,7 +1253,7 @@ function BracketV({ st, gn, recordBracket, bracketUnlocked, completedRounds, see
       <div style={{ paddingTop: 16 }}>
         <Tt>Tournament Bracket</Tt>
         <div style={{ ...gc, textAlign: "center", padding: "40px 20px" }}>
-          <p style={{ fontSize: 56, marginBottom: 12 }}>\ud83d\udd12</p>
+          <p style={{ fontSize: 56, marginBottom: 12 }}>🔒</p>
           <p style={{ fontSize: 16, fontWeight: 700, color: P.white, marginBottom: 8, fontFamily: "Georgia,serif" }}>Locked</p>
           <p style={{ fontSize: 13, color: P.grey, marginBottom: 14 }}>Bracket unlocks after the {seedingRoundsNeeded}-round seeding phase ends.</p>
           <div style={{ display: "inline-flex", alignItems: "center", gap: 10, background: "rgba(0,20,40,.5)", border: "1px solid " + P.gb, borderRadius: 12, padding: "10px 18px" }}>
@@ -1271,7 +1271,7 @@ function BracketV({ st, gn, recordBracket, bracketUnlocked, completedRounds, see
       <div style={{ paddingTop: 16 }}>
         <Tt>Tournament Bracket</Tt>
         <div style={{ ...gc, textAlign: "center", padding: "40px 20px" }}>
-          <p style={{ fontSize: 56, marginBottom: 12 }}>\ud83c\udfaf</p>
+          <p style={{ fontSize: 56, marginBottom: 12 }}>👑</p>
           <p style={{ fontSize: 16, fontWeight: 700, color: P.white, marginBottom: 8, fontFamily: "Georgia,serif" }}>Bracket not generated yet</p>
           <p style={{ fontSize: 12, color: P.grey }}>The admin will generate the bracket once seeding rounds are finalized.</p>
         </div>
@@ -1294,7 +1294,7 @@ function BracketV({ st, gn, recordBracket, bracketUnlocked, completedRounds, see
       {b.champion ? (
         <div style={{ ...gc, padding: "20px 16px", marginBottom: 14, background: "linear-gradient(135deg, rgba(255,184,0,.18), rgba(241,138,0,.08))", borderColor: "rgba(255,184,0,.4)", textAlign: "center" }}>
           <p style={{ fontSize: 11, color: P.amber, letterSpacing: 4, fontWeight: 700, marginBottom: 8 }}>SEASON CHAMPION</p>
-          <p style={{ fontSize: 28, fontWeight: 700, color: P.white, fontFamily: "Georgia,serif" }}>\ud83c\udfc6 {gn(b.champion)}</p>
+          <p style={{ fontSize: 28, fontWeight: 700, color: P.white, fontFamily: "Georgia,serif" }}>🏆 {gn(b.champion)}</p>
         </div>
       ) : (
         <p style={{ fontSize: 11, color: P.dim, textAlign: "center", marginBottom: 14 }}>{b.qualifiedPlayers.length} qualifiers \u00b7 bracket of {b.bracketSize}</p>
