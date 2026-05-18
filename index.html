@@ -463,7 +463,6 @@ function Home({ st, ladder, gn, ini, cd, onJoin }) {
     return "Tied on all tiebreakers";
   };
   const [activeOnly, setActiveOnly] = useState(false);
-  const [showChampHistory, setShowChampHistory] = useState(false);
   const displayLad = ladder.filter(s => s.mp > 0 && (activeOnly ? !s.inactive : true));
   const eloData = useMemo(() => calcElo(st.players, st), [st]);
   const prevElo = useMemo(() => { const prevSt = { ...st, boxMatches: [] }; return calcElo(st.players, prevSt); }, [st]);
@@ -492,12 +491,6 @@ function Home({ st, ladder, gn, ini, cd, onJoin }) {
     return results.slice(0, 10);
   };
 
-  // Last completed cycle champions (all box winners)
-  const lastCyc = st.pastCycles && st.pastCycles.length ? st.pastCycles[st.pastCycles.length - 1] : null;
-  const lastChamps = lastCyc
-    ? (lastCyc.boxes || []).map((box, bi) => { const bm = (lastCyc.boxMatches || []).filter(m => m.box === bi && m.completed && !m.forfeit && !(m.score1 === 0 && m.score2 === 0)); const bs = bm.length ? boxSt(box.players, bm) : []; return bs[0] ? { box: box.name, name: gn(bs[0].id), isSwing: box.isSwing } : null; }).filter(Boolean)
-    : [];
-
   // Cycle progress summary
   const boxSummaries = (st.boxes || []).map((box, bi) => {
     const bm = (st.boxMatches || []).filter(m => m.box === bi);
@@ -516,19 +509,6 @@ function Home({ st, ladder, gn, ini, cd, onJoin }) {
   const pendingMatches = (st.boxMatches || []).filter(m => !m.completed);
   const overdueCount = pendingMatches.length;
   const urgency = daysLeft <= 3 ? "urgent" : daysLeft <= 7 ? "warning" : "normal";
-
-  const historyRows = [...st.pastCycles].reverse().map(c => {
-    const cChamps = (c.boxes || []).map((box, bi) => { const bm = (c.boxMatches || []).filter(m => m.box === bi && m.completed && !m.forfeit && !(m.score1 === 0 && m.score2 === 0)); const bs = bm.length ? boxSt(box.players, bm) : []; return bs[0] ? { box: box.name, name: gn(bs[0].id) } : null; }).filter(Boolean);
-    if (!cChamps.length) return null;
-    return (
-      <div key={c.cycle} style={{ marginBottom: 10 }}>
-        <p style={{ fontSize: 9, color: c.randomized ? P.wc : P.dim, fontWeight: 700, letterSpacing: 1, marginBottom: 4 }}>{c.randomized ? "🎲 " : ""}ROUND {c.cycle} · {fmtDate(c.startedAt)}{c.randomized ? " · RANDOMIZED" : ""}</p>
-        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-          {cChamps.map((w, i) => <span key={i} style={{ fontSize: 10, color: P.off, background: c.randomized ? "rgba(196,161,255,.12)" : "rgba(0,48,82,.4)", padding: "3px 8px", borderRadius: 6 }}>{c.randomized ? "🎱" : "\ud83e\udd47"} {w.box}: {w.name}</span>)}
-        </div>
-      </div>
-    );
-  });
 
   // Season Awards
   const activeLad = ladder.filter(s => s.mp > 0);
@@ -628,48 +608,6 @@ function Home({ st, ladder, gn, ini, cd, onJoin }) {
             </div>
           ))}
         </div>
-      )}
-
-      {/* Last Round Champions */}
-      {lastChamps.length > 0 && (
-        lastCyc.randomized ? (
-          <div style={{ ...gc, padding: "12px 16px", background: "linear-gradient(135deg, rgba(196,161,255,.1), rgba(21,152,203,.08))", borderColor: "rgba(196,161,255,.3)" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
-              <p style={{ fontSize: 9, color: P.wc, letterSpacing: 3, fontWeight: 700 }}>🎲 ROUND {lastCyc.cycle} · RANDOMIZED</p>
-              {st.pastCycles.length > 1 && (
-                <button onClick={() => setShowChampHistory(v => !v)} style={{ fontSize: 9, fontWeight: 700, padding: "3px 10px", borderRadius: 10, background: showChampHistory ? "rgba(196,161,255,.2)" : "transparent", border: "1px solid rgba(196,161,255,.4)", color: P.wc, cursor: "pointer" }}>
-                  🎲 History {showChampHistory ? "▲" : "▼"}
-                </button>
-              )}
-            </div>
-            <p style={{ fontSize: 10, color: P.dim, marginBottom: 10 }}>Boxes were randomly assigned — all winners equal</p>
-            {lastChamps.map((w, i) => (
-              <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "5px 0", borderBottom: i < lastChamps.length - 1 ? "1px solid rgba(196,161,255,.08)" : "none" }}>
-                <span style={{ fontSize: 9, fontWeight: 700, color: P.wc, width: 60 }}>{w.box}</span>
-                <span style={{ flex: 1, fontSize: 13, color: P.white, fontWeight: 600, fontFamily: "Georgia,serif" }}>🎱 {w.name}</span>
-              </div>
-            ))}
-            {showChampHistory && <div style={{ marginTop: 12, borderTop: "1px solid rgba(196,161,255,.15)", paddingTop: 10 }}>{historyRows}</div>}
-          </div>
-        ) : (
-          <div style={{ ...gc, padding: "12px 16px", background: "linear-gradient(135deg, rgba(241,138,0,.12), rgba(21,152,203,.08))", borderColor: "rgba(241,138,0,.3)" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-              <p style={{ fontSize: 9, color: P.orange, letterSpacing: 3, fontWeight: 700 }}>ROUND {lastCyc.cycle} CHAMPIONS</p>
-              {st.pastCycles.length > 1 && (
-                <button onClick={() => setShowChampHistory(v => !v)} style={{ fontSize: 9, fontWeight: 700, padding: "3px 10px", borderRadius: 10, background: showChampHistory ? "rgba(241,138,0,.2)" : "transparent", border: "1px solid rgba(241,138,0,.4)", color: P.amber, cursor: "pointer" }}>
-                  {"\ud83c\udfc6"} History {showChampHistory ? "▲" : "▼"}
-                </button>
-              )}
-            </div>
-            {lastChamps.map((w, i) => (
-              <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "5px 0", borderBottom: i < lastChamps.length - 1 ? "1px solid rgba(21,152,203,.08)" : "none" }}>
-                <span style={{ fontSize: 9, fontWeight: 700, color: w.isSwing ? P.blue : P.orange, width: 60 }}>{w.box}</span>
-                <span style={{ flex: 1, fontSize: 13, color: P.white, fontWeight: 600, fontFamily: "Georgia,serif" }}>{"\ud83e\udd47"} {w.name}</span>
-              </div>
-            ))}
-            {showChampHistory && <div style={{ marginTop: 12, borderTop: "1px solid rgba(21,152,203,.12)", paddingTop: 10 }}>{historyRows}</div>}
-          </div>
-        )
       )}
 
       {!st.cycleNumber && <div style={{ textAlign: "center", padding: "40px 0" }}><p style={{ fontSize: 44 }}>{"\ud83c\udfb1"}</p><p style={{ color: P.grey, marginTop: 10 }}>No active round yet.</p></div>}
