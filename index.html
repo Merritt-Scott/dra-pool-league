@@ -161,6 +161,136 @@ function calcElo(players, st) {
   return { ratings, deltas, played };
 }
 
+// ─── BRACKET LOGIC ──────────────────────────────────────────────────
+// Next power of 2 >= n
+function nextPow2(n) {
+  if (n < 2) return 2;
+  let p = 1;
+  while (p < n) p *= 2;
+  return p;
+}
+// Standard bracket seeding positions: returns array of seeds (1-indexed)
+// in the order they appear in round 1. For size 8: [1,8,4,5,2,7,3,6].
+function seedingOrder(bracketSize) {
+  let order = [1, 2];
+  let size = 2;
+  while (size < bracketSize) {
+    const next = [];
+    const newSize = size * 2;
+    for (const seed of order) {
+      next.push(seed);
+      next.push(newSize + 1 - seed);
+    }
+    order = next;
+    size = newSize;
+  }
+  return order;
+}
+// Generate a fresh bracket from a seed-ordered list of player ids.
+// qualifiedPlayers[0] = seed 1, [1] = seed 2, etc.
+function generateBracket(qualifiedPlayers) {
+  const n = qualifiedPlayers.length;
+  if (n < 2) return null;
+  const bracketSize = nextPow2(n);
+  const order = seedingOrder(bracketSize);
+  const seedToPid = {};
+  for (let i = 0; i < bracketSize; i++) {
+    seedToPid[i + 1] = i < n ? qualifiedPlayers[i] : "BYE";
+  }
+  const rounds = [];
+  const round1 = [];
+  for (let i = 0; i < bracketSize; i += 2) {
+    const seed1 = order[i];
+    const seed2 = order[i + 1];
+    const player1 = seedToPid[seed1];
+    const player2 = seedToPid[seed2];
+    const isBye = player1 === "BYE" || player2 === "BYE";
+    const auto = isBye
+      ? (player1 === "BYE" ? { winner: player2, s1: 0, s2: 2 } : { winner: player1, s1: 2, s2: 0 })
+      : null;
+    round1.push({
+      id: uid(), round: 0, position: i / 2,
+      player1, player2, seed1, seed2,
+      score1: auto ? auto.s1 : null,
+      score2: auto ? auto.s2 : null,
+      completed: !!auto,
+      completedAt: auto ? nw() : null,
+      winner: auto ? auto.winner : null,
+      isBye: !!isBye,
+    });
+  }
+  rounds.push(round1);
+  let roundSize = bracketSize / 2;
+  let roundIdx = 1;
+  while (roundSize >= 2) {
+    const matches = [];
+    const numMatches = roundSize / 2;
+    for (let i = 0; i < numMatches; i++) {
+      matches.push({
+        id: uid(), round: roundIdx, position: i,
+        player1: null, player2: null, seed1: null, seed2: null,
+        score1: null, score2: null,
+        completed: false, completedAt: null, winner: null, isBye: false,
+      });
+    }
+    rounds.push(matches);
+    roundSize = roundSize / 2;
+    roundIdx++;
+  }
+  // Cascade BYE wins into round 2
+  for (const m of rounds[0]) {
+    if (m.completed && rounds[1]) {
+      const nextMatch = rounds[1][Math.floor(m.position / 2)];
+      const slot = m.position % 2 === 0 ? "player1" : "player2";
+      const seedSlot = m.position % 2 === 0 ? "seed1" : "seed2";
+      nextMatch[slot] = m.winner;
+      nextMatch[seedSlot] = m.winner === seedToPid[m.seed1] ? m.seed1 : m.seed2;
+    }
+  }
+  return { generatedAt: nw(), qualifiedPlayers: [...qualifiedPlayers], bracketSize, rounds, champion: null };
+}
+// Compute qualifiers from cumulative standings (all participants who played any real match).
+function computeQualifiers(players, st) {
+  const lad = calcLad(players, st);
+  const participated = new Set();
+  (st.pastCycles || []).forEach(c => {
+    (c.boxMatches || []).forEach(m => {
+      if (m.completed && !m.forfeit && !(m.score1 === 0 && m.score2 === 0)) {
+        participated.add(m.player1); participated.add(m.player2);
+      }
+    });
+  });
+  return lad.filter(s => participated.has(s.id)).map(s => s.id);
+}
+// Record a bracket match result and advance the winner.
+function recordBracketResult(bracket, matchId, score1, score2) {
+  let foundRound = -1, foundIdx = -1, m = null;
+  for (let r = 0; r < bracket.rounds.length; r++) {
+    const idx = bracket.rounds[r].findIndex(x => x.id === matchId);
+    if (idx >= 0) { foundRound = r; foundIdx = idx; m = bracket.rounds[r][idx]; break; }
+  }
+  if (!m) return bracket;
+  if (m.isBye) return bracket;
+  if (score1 === score2) return bracket;
+  if (score1 !== 2 && score2 !== 2) return bracket;
+  const winner = score1 > score2 ? m.player1 : m.player2;
+  const winnerSeed = score1 > score2 ? m.seed1 : m.seed2;
+  const next = { ...bracket, rounds: bracket.rounds.map(r => r.map(mm => ({ ...mm }))) };
+  const updated = next.rounds[foundRound][foundIdx];
+  updated.score1 = score1; updated.score2 = score2;
+  updated.completed = true; updated.completedAt = nw(); updated.winner = winner;
+  if (foundRound + 1 < next.rounds.length) {
+    const nextMatch = next.rounds[foundRound + 1][Math.floor(foundIdx / 2)];
+    const slot = foundIdx % 2 === 0 ? "player1" : "player2";
+    const seedSlot = foundIdx % 2 === 0 ? "seed1" : "seed2";
+    nextMatch[slot] = winner;
+    nextMatch[seedSlot] = winnerSeed;
+  } else {
+    next.champion = winner;
+  }
+  return next;
+}
+
 // Get monthly champions from past cycles (Box 1 winner)
 function getChampions(st, gn) {
   const champs = [];
@@ -187,7 +317,7 @@ function getChampions(st, gn) {
 
 
 const PLAYERS = ["Gianna Acitelli","Elvira Aguillon","Koula Angelinas","Jean Marie Apruzzese","Gerard Apruzzese","Frank Banta","Bart Bess","Glen Besser","Sreyansh Biswal","Amanda Bloshuk","Eduardo Bonilla","Jason Borreo","Brad Boyle","Adam Breen","Duncan Brennan","Kenneth Carpenter","Hans Castaneda","Miguel Castro","Karen Chen","Steven Ciardiello","Dan Conlisk","Christopher Cook","Bridget Cooney","Rafael Cordero","Mike Cottam","Nicholas Cresta","Shawn Dacey","Zahra Derrick","James Driscoll","Matthew Farina","Susan Fattorusso","Lucy Ferrantelli","Sandy French","Daniel Giordano","Daniel Goldman","Brett Gottlieb","Korey Grabowski","Daniel Graham","David Gray","Andrew Grider","Max Gustafson","John Haaf","Melissa Haime","Christopher Halloran","William Hankers","Jake Hannah","Lauren Hayes","Anthony Helmandollar","Ian Holland","Hussein Hussein","Robert Hyman","Peter Ibelli","Patrick Judge","Brian Kittner","Sam Klaber","Jared Konigsberg","John Kopans","Werner Kratovil","Jonathan Lea","Jeffrey Lehrman","Christopher Lepore","Wei Lin","Jack Linehan","David Luski","Jason Luski","Shayne Lyons","Sloan Martin","Gabriella Mascellino","Quinn McQuade","Adam Melnick","Mario Minera","Anna Ming","Cristin Mitchell","Melanie Mohr","Indira Negron","Payton Odom","Peter Papadakos","Anjali Pharsi","Regina Poniros","Delaney Reynolds","Stephanie Rivera","Janine Roberts","Maria Rodriguez","Charles Ruotolo","Michelle Santos","Merritt Scott","John Serzan","Tracy Shi","Matt Shore","Tracy Sonnabend","Kim Stirba","Carol Su","Stephen Suriano","Aaron Talan","Amanda Taylor","Anthony Venditti","Ivan Vidal","Hope Wasserman","Andrew Wietstock","Liying Yang","Thomas Yang","Ashley Yip","Michael Yurick"].map(n => ({ id: uid(), name: n, joinedAt: nw() }));
-const DEF = { players: PLAYERS, boxes: [], boxMatches: [], checkedIn: [], pastCycles: [], cycleNumber: 0, cycleStart: null, cycleDurationWeeks: 2, auditLog: [], adminPin: null, announcement: null, seasonStart: null, seasonEnd: null, seasonName: "" };
+const DEF = { players: PLAYERS, boxes: [], boxMatches: [], checkedIn: [], pastCycles: [], cycleNumber: 0, cycleStart: null, cycleDurationWeeks: 2, auditLog: [], adminPin: null, announcement: null, seasonStart: null, seasonEnd: null, seasonName: "", bracket: null, seedingRounds: 5 };
 const withLog = (s, action, details) => { const al = [...(s.auditLog || []), { id: uid(), ts: nw(), action, details }]; return { ...s, auditLog: al.length > 200 ? al.slice(-200) : al }; };
 
 function useCD(cycleStart, weeks) { const [r, setR] = useState({ d: 0, h: 0, m: 0 }); useEffect(() => { const tick = () => { if (!cycleStart) { setR({ d: 0, h: 0, m: 0 }); return; } const end = new Date(new Date(cycleStart).getTime() + (weeks || 2) * 7 * 864e5); const diff = Math.max(0, end.getTime() - Date.now()); setR({ d: Math.floor(diff / 864e5), h: Math.floor((diff % 864e5) / 36e5), m: Math.floor((diff % 36e5) / 6e4) }); }; tick(); const id = setInterval(tick, 6e4); return () => clearInterval(id); }, [cycleStart, weeks]); return r; }
@@ -313,11 +443,35 @@ function App() {
   const undoCyc = () => { if (st.cycleNumber < 1) return; const prev = st.pastCycles[st.pastCycles.length - 1]; const restore = arr => (arr || []).map(m => m.autoForfeit ? { ...m, score1: null, score2: null, completed: false, completedAt: null, forfeit: false, autoForfeit: false } : m); const base = prev ? { ...st, pastCycles: st.pastCycles.slice(0, -1), boxes: prev.boxes || [], boxMatches: restore(prev.boxMatches), checkedIn: [], cycleStart: prev.startedAt, cycleNumber: st.cycleNumber - 1 } : { ...st, boxes: [], boxMatches: [], checkedIn: [], cycleStart: null, cycleNumber: 0 }; save(withLog(base, "CYCLE_UNDONE", "Round " + st.cycleNumber)); flash("Undone!"); };
   const logR = (id, s1, s2, list) => { if (typeof s1 !== "number" || typeof s2 !== "number" || s1 < 0 || s2 < 0 || s1 > 2 || s2 > 2 || (s1 !== 2 && s2 !== 2) || s1 === s2) { flash("Invalid score"); return; } const m = st[list].find(x => x.id === id); const det = m ? gn(m.player1) + " " + s1 + "-" + s2 + " " + gn(m.player2) : id; const playerIds = new Set(st.players.map(p => p.id)); const newCI = m ? [...new Set([...st.checkedIn, m.player1, m.player2])].filter(id => playerIds.has(id)) : st.checkedIn; save(withLog({ ...st, [list]: st[list].map(m => m.id === id ? { ...m, score1: s1, score2: s2, completed: true, completedAt: nw(), forfeit: false } : m), checkedIn: newCI }, "MATCH_RECORDED", det)); flash(m ? gn(m.player1) + " " + s1 + "–" + s2 + " " + gn(m.player2) : "Recorded!"); };
   const ffM = (id, list) => { const m = st[list].find(x => x.id === id); const det = m ? gn(m.player1) + " vs " + gn(m.player2) : id; save(withLog({ ...st, [list]: st[list].map(m => m.id === id ? { ...m, score1: 0, score2: 0, completed: true, completedAt: nw(), forfeit: true } : m) }, "MATCH_FORFEIT", det)); flash(m ? gn(m.player1) + " vs " + gn(m.player2) + " — not played" : "Not played"); };
+  const genBracket = () => {
+    const quals = computeQualifiers(st.players, st);
+    if (quals.length < 2) { flash("Need 2+ participants"); return; }
+    const b = generateBracket(quals);
+    save(withLog({ ...st, bracket: b }, "BRACKET_GENERATED", quals.length + " qualifiers"));
+    flash("Bracket generated! " + quals.length + " qualifiers");
+  };
+  const resetBracket = () => {
+    save(withLog({ ...st, bracket: null }, "BRACKET_RESET", ""));
+    flash("Bracket reset");
+  };
+  const recordBracket = (matchId, s1, s2) => {
+    if (!st.bracket) { flash("No bracket"); return; }
+    if (s1 === s2) { flash("Tie not allowed"); return; }
+    if (s1 !== 2 && s2 !== 2) { flash("Best of 3: one player must reach 2"); return; }
+    const nb = recordBracketResult(st.bracket, matchId, s1, s2);
+    const det = nb.champion ? "CHAMPION: " + (st.players.find(p => p.id === nb.champion) || {}).name : "match recorded";
+    save(withLog({ ...st, bracket: nb }, nb.champion ? "BRACKET_CHAMPION" : "BRACKET_MATCH", det));
+    if (nb.champion) flash("🏆 Champion crowned!");
+    else flash("Match recorded — winner advances");
+  };
   const resetAll = () => { save(DEF); flash("Reset!"); setView("home"); };
 
+  const seedingRoundsNeeded = st.seedingRounds || 5;
+  const completedRounds = (st.pastCycles || []).length;
+  const bracketUnlocked = completedRounds >= seedingRoundsNeeded;
   const tabs = SPECTATOR
-    ? [["home", "\ud83c\udfc6"], ["boxes", "\ud83d\udcca"], ["matches", "\ud83c\udfb1"], ["rules", "\ud83d\udcd6"]]
-    : [["home", "\ud83c\udfc6"], ["boxes", "\ud83d\udcca"], ["matches", "\ud83c\udfb1"], ["checkin", "\u2705"], ["rules", "\ud83d\udcd6"]];
+    ? [["home", "\ud83c\udfc6"], ["boxes", "\ud83d\udcca"], ["matches", "\ud83c\udfb1"], ["bracket", "\ud83c\udfaf"], ["rules", "\ud83d\udcd6"]]
+    : [["home", "\ud83c\udfc6"], ["boxes", "\ud83d\udcca"], ["matches", "\ud83c\udfb1"], ["bracket", "\ud83c\udfaf"], ["checkin", "\u2705"], ["rules", "\ud83d\udcd6"]];
 
   return (
     <div onTouchStart={onTouchStart} onTouchEnd={onTouchEnd} style={{ minHeight: "100vh", background: P.navy, color: P.off, fontFamily: "'DM Sans',Helvetica,sans-serif" }}>
@@ -364,24 +518,25 @@ function App() {
         </div>
       )}
       <main style={{ maxWidth: 600, margin: "0 auto", padding: "0 14px 110px", animation: "fadeIn .3s", position: "relative", zIndex: 1 }}>
-        {view === "home" && <Home st={st} ladder={ladder} gn={gn} ini={ini} cd={cd} onJoin={() => { setView("checkin"); setNavIdx(3); setCheckInFocus(true); }} />}
+        {view === "home" && <Home st={st} ladder={ladder} gn={gn} ini={ini} cd={cd} onJoin={() => { setView("checkin"); setNavIdx(4); setCheckInFocus(true); }} />}
         {view === "boxes" && <BoxesV st={st} gn={gn} ini={ini} logR={logR} ffM={ffM} />}
         {view === "matches" && <MatchesV st={st} gn={gn} logR={logR} ffM={ffM} />}
+        {view === "bracket" && <BracketV st={st} gn={gn} recordBracket={recordBracket} bracketUnlocked={bracketUnlocked} completedRounds={completedRounds} seedingRoundsNeeded={seedingRoundsNeeded} />}
         {view === "checkin" && <CheckInV st={st} ladder={ladder} togCI={togCI} selLast={selLast} autoOpen={checkInFocus} onAutoOpenDone={() => setCheckInFocus(false)} />}
         {view === "rules" && <RulesV />}
-        {view === "admin" && <AdminV st={st} ladder={ladder} previewCyc={previewCyc} confirmCyc={confirmCyc} completeCyc={completeCyc} endEarlyCyc={endEarlyCyc} undoCyc={undoCyc} resetAll={resetAll} addP={addP} rmP={rmP} ffM={ffM} gn={gn} save={save} togCI={togCI} />}
+        {view === "admin" && <AdminV st={st} ladder={ladder} previewCyc={previewCyc} confirmCyc={confirmCyc} completeCyc={completeCyc} endEarlyCyc={endEarlyCyc} undoCyc={undoCyc} resetAll={resetAll} addP={addP} rmP={rmP} ffM={ffM} gn={gn} save={save} togCI={togCI} genBracket={genBracket} resetBracket={resetBracket} completedRounds={completedRounds} seedingRoundsNeeded={seedingRoundsNeeded} />}
       </main>
       <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 10, padding: "0 14px", paddingBottom: "max(10px, env(safe-area-inset-bottom))" }}>
         <nav style={{ display: "flex", justifyContent: "space-around", alignItems: "center", padding: "6px 4px", background: "rgba(255,255,255,.08)", backdropFilter: "blur(40px) saturate(200%)", WebkitBackdropFilter: "blur(40px) saturate(200%)", borderRadius: 28, border: "1px solid rgba(255,255,255,.18)", borderTop: "1px solid rgba(255,255,255,.28)", boxShadow: "0 8px 40px rgba(0,0,0,.4), inset 0 1px 0 rgba(255,255,255,.18)", position: "relative", marginBottom: 8, overflow: "hidden" }}>
-          <div style={{ position: "absolute", left: `calc(${navIdx} * (100% / 5) + 3px)`, width: "calc(100% / 5 - 6px)", top: 4, bottom: 4, borderRadius: 22, background: "rgba(255,255,255,.13)", border: "1px solid rgba(255,255,255,.22)", boxShadow: "inset 0 1px 0 rgba(255,255,255,.3)", transition: "left .28s cubic-bezier(.34,1.56,.64,1)", pointerEvents: "none" }} />
+          <div style={{ position: "absolute", left: `calc(${navIdx} * (100% / 6) + 3px)`, width: "calc(100% / 6 - 6px)", top: 4, bottom: 4, borderRadius: 22, background: "rgba(255,255,255,.13)", border: "1px solid rgba(255,255,255,.22)", boxShadow: "inset 0 1px 0 rgba(255,255,255,.3)", transition: "left .28s cubic-bezier(.34,1.56,.64,1)", pointerEvents: "none" }} />
           {tabs.map(([v, ic], i) => {
-            const label = v === "checkin" ? "Players" : v === "rules" ? "Rules" : v;
+            const label = v === "checkin" ? "Players" : v === "rules" ? "Rules" : v === "bracket" ? "Bracket" : v;
             const isActive = view === v;
             const isTapped = tappedTab === i;
             return (
-              <button key={v} onClick={() => { setView(v); setNavIdx(i); setTappedTab(i); setTimeout(() => setTappedTab(null), 420); }} style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "6px 4px 5px", background: "none", border: "none", cursor: "pointer", position: "relative", flex: 1, minHeight: 52 }}>
+              <button key={v} onClick={() => { if (v === "bracket" && !bracketUnlocked) { flash("Bracket unlocks after " + seedingRoundsNeeded + " rounds (" + completedRounds + "/" + seedingRoundsNeeded + " done)"); return; } setView(v); setNavIdx(i); setTappedTab(i); setTimeout(() => setTappedTab(null), 420); }} style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "6px 4px 5px", background: "none", border: "none", cursor: "pointer", position: "relative", flex: 1, minHeight: 52, opacity: (v === "bracket" && !bracketUnlocked) ? 0.4 : 1 }}>
                 {isTapped && <span style={{ position: "absolute", top: "50%", left: "50%", width: 36, height: 36, borderRadius: "50%", background: "radial-gradient(circle, rgba(241,138,0,.5) 0%, transparent 70%)", animation: "glowBurst .42s ease-out forwards", pointerEvents: "none" }} />}
-                <span style={{ fontSize: isActive ? 22 : 19, lineHeight: 1, animation: isTapped ? "navBounce .42s cubic-bezier(.34,1.56,.64,1)" : "none", display: "block" }}>{ic}</span>
+                <span style={{ fontSize: isActive ? 22 : 19, lineHeight: 1, animation: isTapped ? "navBounce .42s cubic-bezier(.34,1.56,.64,1)" : "none", display: "block", position: "relative" }}>{ic}{v === "bracket" && !bracketUnlocked && <span style={{ position: "absolute", top: -2, right: -8, fontSize: 10 }}>\ud83d\udd12</span>}</span>
                 {isActive && <span style={{ fontSize: 8, fontWeight: 700, letterSpacing: .8, textTransform: "uppercase", color: P.orange, marginTop: 2, animation: "fadeIn .2s" }}>{label}</span>}
               </button>
             );
@@ -571,6 +726,14 @@ function Home({ st, ladder, gn, ini, cd, onJoin }) {
             <p style={{ fontSize: 12, color: P.white, fontWeight: 700 }}>{st.seasonName}</p>
             {st.seasonStart && st.seasonEnd && <p style={{ fontSize: 10, color: P.dim }}>{fmtDate(st.seasonStart)} → {fmtDate(st.seasonEnd)}</p>}
           </div>
+        </div>
+      )}
+      {/* Season Champion banner (when bracket champion crowned) */}
+      {st.bracket && st.bracket.champion && (
+        <div style={{ ...gc, padding: "18px 16px", marginBottom: 10, background: "linear-gradient(135deg, rgba(255,184,0,.2), rgba(241,138,0,.1))", borderColor: "rgba(255,184,0,.5)", textAlign: "center" }}>
+          <p style={{ fontSize: 10, color: P.amber, letterSpacing: 4, fontWeight: 700, marginBottom: 8 }}>SEASON CHAMPION</p>
+          <p style={{ fontSize: 26, fontWeight: 700, color: P.white, fontFamily: "Georgia,serif", marginBottom: 4 }}>🏆 {gn(st.bracket.champion)}</p>
+          {st.seasonName && <p style={{ fontSize: 11, color: P.dim }}>{st.seasonName}</p>}
         </div>
       )}
 
@@ -1074,6 +1237,130 @@ function RulesV() {
   );
 }
 
+// ─── BRACKET ─────────────────────────────────────────────────
+function BracketV({ st, gn, recordBracket, bracketUnlocked, completedRounds, seedingRoundsNeeded }) {
+  const [activeId, setActiveId] = useState(null);
+  const [s1, setS1] = useState(2);
+  const [s2, setS2] = useState(0);
+  const ini3 = (id) => { if (!id) return ""; if (id === "BYE") return "BYE"; const n = gn(id); return n.split(" ").map(w => w[0]).join("").toUpperCase().slice(0, 3); };
+  const valid = (s1 === 2 && s2 < 2) || (s2 === 2 && s1 < 2);
+  const sub = (matchId) => { if (valid) { recordBracket(matchId, s1, s2); setActiveId(null); setS1(2); setS2(0); } };
+  const cancel = () => { setActiveId(null); setS1(2); setS2(0); };
+
+  if (!bracketUnlocked) {
+    const remaining = seedingRoundsNeeded - completedRounds;
+    return (
+      <div style={{ paddingTop: 16 }}>
+        <Tt>Tournament Bracket</Tt>
+        <div style={{ ...gc, textAlign: "center", padding: "40px 20px" }}>
+          <p style={{ fontSize: 56, marginBottom: 12 }}>\ud83d\udd12</p>
+          <p style={{ fontSize: 16, fontWeight: 700, color: P.white, marginBottom: 8, fontFamily: "Georgia,serif" }}>Locked</p>
+          <p style={{ fontSize: 13, color: P.grey, marginBottom: 14 }}>Bracket unlocks after the {seedingRoundsNeeded}-round seeding phase ends.</p>
+          <div style={{ display: "inline-flex", alignItems: "center", gap: 10, background: "rgba(0,20,40,.5)", border: "1px solid " + P.gb, borderRadius: 12, padding: "10px 18px" }}>
+            <span style={{ fontSize: 11, color: P.dim, letterSpacing: 2, fontWeight: 700 }}>PROGRESS</span>
+            <span style={{ fontSize: 20, fontWeight: 700, color: P.orange, fontFamily: "Georgia,serif" }}>{completedRounds}<span style={{ color: P.dim, fontSize: 14 }}> / {seedingRoundsNeeded}</span></span>
+          </div>
+          <p style={{ fontSize: 11, color: P.dim, marginTop: 14 }}>{remaining} round{remaining !== 1 ? "s" : ""} remaining</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!st.bracket) {
+    return (
+      <div style={{ paddingTop: 16 }}>
+        <Tt>Tournament Bracket</Tt>
+        <div style={{ ...gc, textAlign: "center", padding: "40px 20px" }}>
+          <p style={{ fontSize: 56, marginBottom: 12 }}>\ud83c\udfaf</p>
+          <p style={{ fontSize: 16, fontWeight: 700, color: P.white, marginBottom: 8, fontFamily: "Georgia,serif" }}>Bracket not generated yet</p>
+          <p style={{ fontSize: 12, color: P.grey }}>The admin will generate the bracket once seeding rounds are finalized.</p>
+        </div>
+      </div>
+    );
+  }
+
+  const b = st.bracket;
+  const roundLabel = (idx, total) => {
+    const fromEnd = total - 1 - idx;
+    if (fromEnd === 0) return "Final";
+    if (fromEnd === 1) return "Semifinals";
+    if (fromEnd === 2) return "Quarterfinals";
+    return "Round of " + Math.pow(2, total - idx);
+  };
+
+  return (
+    <div style={{ paddingTop: 16 }}>
+      <Tt>Tournament Bracket</Tt>
+      {b.champion ? (
+        <div style={{ ...gc, padding: "20px 16px", marginBottom: 14, background: "linear-gradient(135deg, rgba(255,184,0,.18), rgba(241,138,0,.08))", borderColor: "rgba(255,184,0,.4)", textAlign: "center" }}>
+          <p style={{ fontSize: 11, color: P.amber, letterSpacing: 4, fontWeight: 700, marginBottom: 8 }}>SEASON CHAMPION</p>
+          <p style={{ fontSize: 28, fontWeight: 700, color: P.white, fontFamily: "Georgia,serif" }}>\ud83c\udfc6 {gn(b.champion)}</p>
+        </div>
+      ) : (
+        <p style={{ fontSize: 11, color: P.dim, textAlign: "center", marginBottom: 14 }}>{b.qualifiedPlayers.length} qualifiers \u00b7 bracket of {b.bracketSize}</p>
+      )}
+      <div style={{ overflowX: "auto", paddingBottom: 10 }}>
+        <div style={{ display: "flex", gap: 16, minWidth: b.rounds.length * 200 }}>
+          {b.rounds.map((round, rIdx) => (
+            <div key={rIdx} style={{ flex: "0 0 200px", display: "flex", flexDirection: "column" }}>
+              <p style={{ fontSize: 9, color: P.amber, fontWeight: 700, letterSpacing: 3, textTransform: "uppercase", marginBottom: 10, textAlign: "center" }}>{roundLabel(rIdx, b.rounds.length)}</p>
+              <div style={{ display: "flex", flexDirection: "column", gap: 10, justifyContent: "space-around", flex: 1 }}>
+                {round.map(m => {
+                  const isActive = activeId === m.id;
+                  const playable = !m.completed && !m.isBye && m.player1 && m.player2;
+                  const isWin1 = m.completed && m.winner === m.player1;
+                  const isWin2 = m.completed && m.winner === m.player2;
+                  return (
+                    <div key={m.id} style={{ background: m.isBye ? "rgba(255,255,255,.02)" : "rgba(0,20,40,.55)", border: "1px solid " + (isActive ? P.amber : "rgba(255,255,255,.08)"), borderRadius: 10, overflow: "hidden", opacity: m.isBye ? 0.55 : 1 }}>
+                      {/* Player 1 row */}
+                      <div onClick={() => playable && setActiveId(activeId === m.id ? null : m.id)} style={{ display: "flex", alignItems: "center", padding: "8px 10px", borderBottom: "1px solid rgba(255,255,255,.05)", cursor: playable ? "pointer" : "default", background: isWin1 ? "rgba(255,184,0,.08)" : "transparent" }}>
+                        <span style={{ fontSize: 9, color: P.dim, width: 22 }}>{m.seed1 ? "#" + m.seed1 : ""}</span>
+                        <span style={{ flex: 1, fontSize: 12, fontWeight: isWin1 ? 700 : 500, color: m.player1 === "BYE" ? P.dim : (isWin1 ? P.white : P.off), fontStyle: m.player1 === "BYE" ? "italic" : "normal" }}>{m.player1 ? (m.player1 === "BYE" ? "BYE" : gn(m.player1)) : <span style={{ color: P.dim }}>TBD</span>}</span>
+                        {m.completed && <span style={{ fontSize: 13, fontWeight: 700, color: isWin1 ? P.amber : P.dim, width: 18, textAlign: "center" }}>{m.score1}</span>}
+                      </div>
+                      {/* Player 2 row */}
+                      <div onClick={() => playable && setActiveId(activeId === m.id ? null : m.id)} style={{ display: "flex", alignItems: "center", padding: "8px 10px", cursor: playable ? "pointer" : "default", background: isWin2 ? "rgba(255,184,0,.08)" : "transparent" }}>
+                        <span style={{ fontSize: 9, color: P.dim, width: 22 }}>{m.seed2 ? "#" + m.seed2 : ""}</span>
+                        <span style={{ flex: 1, fontSize: 12, fontWeight: isWin2 ? 700 : 500, color: m.player2 === "BYE" ? P.dim : (isWin2 ? P.white : P.off), fontStyle: m.player2 === "BYE" ? "italic" : "normal" }}>{m.player2 ? (m.player2 === "BYE" ? "BYE" : gn(m.player2)) : <span style={{ color: P.dim }}>TBD</span>}</span>
+                        {m.completed && <span style={{ fontSize: 13, fontWeight: 700, color: isWin2 ? P.amber : P.dim, width: 18, textAlign: "center" }}>{m.score2}</span>}
+                      </div>
+                      {/* Score entry expanded */}
+                      {isActive && (
+                        <div style={{ padding: "10px 10px 12px", background: "rgba(0,10,25,.7)", borderTop: "1px solid " + P.amber }}>
+                          <p style={{ fontSize: 9, color: P.amber, letterSpacing: 2, fontWeight: 700, textAlign: "center", marginBottom: 8 }}>BEST OF 3</p>
+                          <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
+                            {[m.player1, m.player2].map((pid, pi) => {
+                              const cur = pi === 0 ? s1 : s2, set = pi === 0 ? setS1 : setS2;
+                              const ov = pi === 0 ? s2 : s1, so = pi === 0 ? setS2 : setS1;
+                              return (
+                                <div key={pi} style={{ flex: 1, textAlign: "center" }}>
+                                  <p style={{ fontSize: 9, color: P.off, marginBottom: 5, fontWeight: 600 }}>{ini3(pid)}</p>
+                                  <div style={{ display: "flex", gap: 3, justifyContent: "center" }}>
+                                    {[0, 1, 2].map(v => <button key={v} onClick={() => { set(v); if (v === 2 && ov === 2) so(1); }} style={{ width: 28, height: 28, borderRadius: 7, border: "none", cursor: "pointer", fontSize: 12, fontWeight: 700, background: cur === v ? "linear-gradient(135deg," + P.amber + ",#F59E0B)" : "rgba(255,255,255,.08)", color: cur === v ? P.navy : P.off }}>{v}</button>)}
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                          <div style={{ display: "flex", gap: 5 }}>
+                            <button onClick={() => sub(m.id)} disabled={!valid} style={{ flex: 1, padding: "7px 0", background: valid ? "linear-gradient(135deg,#34D399,#059669)" : "rgba(255,255,255,.08)", border: "none", borderRadius: 7, color: valid ? "#fff" : P.dim, fontWeight: 700, fontSize: 11, cursor: valid ? "pointer" : "default" }}>{valid ? "Confirm " + s1 + "\u2013" + s2 : "Pick scores"}</button>
+                            <button onClick={cancel} style={{ padding: "7px 10px", background: "transparent", border: "1px solid " + P.dim, borderRadius: 7, color: P.dim, fontWeight: 700, fontSize: 10, cursor: "pointer" }}>Cancel</button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+      <p style={{ fontSize: 10, color: P.dim, textAlign: "center", marginTop: 14 }}>{b.bracketSize === b.qualifiedPlayers.length ? "Full bracket, no byes." : "BYE = first-round bye for top seeds (auto-advance)."}</p>
+    </div>
+  );
+}
+
 // ─── ADMIN ───────────────────────────────────────────────────
 function PastCycleRow({ c, gn, cycleIdx, saveCycle }) {
   const [open, setOpen] = useState(false);
@@ -1293,7 +1580,7 @@ function PastCycleRow({ c, gn, cycleIdx, saveCycle }) {
   );
 }
 
-function AdminV({ st, ladder, previewCyc, confirmCyc, completeCyc, endEarlyCyc, undoCyc, resetAll, addP, rmP, ffM, gn, save, togCI }) {
+function AdminV({ st, ladder, previewCyc, confirmCyc, completeCyc, endEarlyCyc, undoCyc, resetAll, addP, rmP, ffM, gn, save, togCI, genBracket, resetBracket, completedRounds, seedingRoundsNeeded }) {
   const [pin, setPin] = useState(""); const [ok, setOk] = useState(false); const [err, setErr] = useState(false);
   const [cc, setCc] = useState(false); const [cr, setCr] = useState(false); const [cu, setCu] = useState(false);
   const [nm, setNm] = useState(""); const [rmId, setRmId] = useState(null); const [search, setSearch] = useState("");
@@ -1433,6 +1720,29 @@ function AdminV({ st, ladder, previewCyc, confirmCyc, completeCyc, endEarlyCyc, 
       </div>
       {st.seasonStart && st.seasonEnd && (
         <p style={{ fontSize: 10, color: P.dim, marginTop: 8 }}>Season runs {fmtDate(st.seasonStart)} → {fmtDate(st.seasonEnd)} ({Math.round(dd(st.seasonEnd, st.seasonStart))} days)</p>
+      )}
+    </div>
+
+    <div style={gc}><h4 style={{ fontSize: 15, fontWeight: 600, color: P.white, marginBottom: 6, fontFamily: "Georgia,serif" }}>Tournament Bracket</h4>
+      <p style={{ fontSize: 11, color: P.grey, marginBottom: 10 }}>Bracket unlocks for players once {seedingRoundsNeeded} round{seedingRoundsNeeded !== 1 ? "s" : ""} are complete. Currently {completedRounds}/{seedingRoundsNeeded}.</p>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
+        <label style={{ fontSize: 11, color: P.grey, flex: 1 }}>Seeding rounds before bracket unlocks</label>
+        <input type="number" min="1" max="20" value={st.seedingRounds || 5} onChange={e => save({ ...st, seedingRounds: Math.max(1, Math.min(20, +e.target.value || 1)) })} style={{ ...ssS, width: 60, marginBottom: 0, textAlign: "center" }} />
+      </div>
+      {st.bracket ? (
+        <div>
+          <div style={{ background: "rgba(255,184,0,.06)", border: "1px solid rgba(255,184,0,.2)", borderRadius: 10, padding: "10px 12px", marginBottom: 8 }}>
+            <p style={{ fontSize: 11, color: P.amber, fontWeight: 700, marginBottom: 4 }}>Bracket generated</p>
+            <p style={{ fontSize: 10, color: P.grey }}>{st.bracket.qualifiedPlayers.length} qualifiers · bracket of {st.bracket.bracketSize} · {st.bracket.champion ? "Champion: " + gn(st.bracket.champion) : "In progress"}</p>
+          </div>
+          {!st.bracket.champion && (
+            <button onClick={() => { if (confirm("Reset the bracket? All recorded bracket matches will be lost.")) resetBracket(); }} style={{ ...bpS, background: "transparent", border: "1px solid " + P.bad, color: P.bad, marginTop: 0 }}>Reset Bracket</button>
+          )}
+        </div>
+      ) : completedRounds < seedingRoundsNeeded ? (
+        <p style={{ fontSize: 11, color: P.dim, fontStyle: "italic" }}>Complete {seedingRoundsNeeded - completedRounds} more round{seedingRoundsNeeded - completedRounds !== 1 ? "s" : ""} to enable bracket generation.</p>
+      ) : (
+        <button onClick={genBracket} style={{ ...bpS, background: "linear-gradient(135deg," + P.amber + ",#F59E0B)", color: P.navy, marginTop: 0 }}>Generate Bracket</button>
       )}
     </div>
 
