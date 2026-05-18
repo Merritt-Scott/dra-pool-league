@@ -317,7 +317,7 @@ function App() {
 
   const tabs = SPECTATOR
     ? [["home", "\ud83c\udfc6"], ["boxes", "\ud83d\udcca"], ["matches", "\ud83c\udfb1"], ["rules", "\ud83d\udcd6"]]
-    : [["home", "\ud83c\udfc6"], ["boxes", "\ud83d\udcca"], ["matches", "\ud83c\udfb1"], ["challenge", "\u2694\ufe0f"], ["checkin", "\u2705"], ["rules", "\ud83d\udcd6"]];
+    : [["home", "\ud83c\udfc6"], ["boxes", "\ud83d\udcca"], ["matches", "\ud83c\udfb1"], ["checkin", "\u2705"], ["rules", "\ud83d\udcd6"]];
 
   return (
     <div onTouchStart={onTouchStart} onTouchEnd={onTouchEnd} style={{ minHeight: "100vh", background: P.navy, color: P.off, fontFamily: "'DM Sans',Helvetica,sans-serif" }}>
@@ -364,7 +364,7 @@ function App() {
         </div>
       )}
       <main style={{ maxWidth: 600, margin: "0 auto", padding: "0 14px 110px", animation: "fadeIn .3s", position: "relative", zIndex: 1 }}>
-        {view === "home" && <Home st={st} ladder={activeLad} gn={gn} ini={ini} cd={cd} onJoin={() => { setView("checkin"); setNavIdx(4); setCheckInFocus(true); }} />}
+        {view === "home" && <Home st={st} ladder={activeLad} gn={gn} ini={ini} cd={cd} onJoin={() => { setView("checkin"); setNavIdx(3); setCheckInFocus(true); }} />}
         {view === "boxes" && <BoxesV st={st} gn={gn} ini={ini} logR={logR} ffM={ffM} />}
         {view === "matches" && <MatchesV st={st} gn={gn} logR={logR} ffM={ffM} />}
         {view === "checkin" && <CheckInV st={st} ladder={ladder} togCI={togCI} selLast={selLast} autoOpen={checkInFocus} onAutoOpenDone={() => setCheckInFocus(false)} />}
@@ -373,7 +373,7 @@ function App() {
       </main>
       <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 10, padding: "0 14px", paddingBottom: "max(10px, env(safe-area-inset-bottom))" }}>
         <nav style={{ display: "flex", justifyContent: "space-around", alignItems: "center", padding: "6px 4px", background: "rgba(255,255,255,.08)", backdropFilter: "blur(40px) saturate(200%)", WebkitBackdropFilter: "blur(40px) saturate(200%)", borderRadius: 28, border: "1px solid rgba(255,255,255,.18)", borderTop: "1px solid rgba(255,255,255,.28)", boxShadow: "0 8px 40px rgba(0,0,0,.4), inset 0 1px 0 rgba(255,255,255,.18)", position: "relative", marginBottom: 8, overflow: "hidden" }}>
-          <div style={{ position: "absolute", left: `calc(${navIdx} * (100% / 6) + 3px)`, width: "calc(100% / 6 - 6px)", top: 4, bottom: 4, borderRadius: 22, background: "rgba(255,255,255,.13)", border: "1px solid rgba(255,255,255,.22)", boxShadow: "inset 0 1px 0 rgba(255,255,255,.3)", transition: "left .28s cubic-bezier(.34,1.56,.64,1)", pointerEvents: "none" }} />
+          <div style={{ position: "absolute", left: `calc(${navIdx} * (100% / 5) + 3px)`, width: "calc(100% / 5 - 6px)", top: 4, bottom: 4, borderRadius: 22, background: "rgba(255,255,255,.13)", border: "1px solid rgba(255,255,255,.22)", boxShadow: "inset 0 1px 0 rgba(255,255,255,.3)", transition: "left .28s cubic-bezier(.34,1.56,.64,1)", pointerEvents: "none" }} />
           {tabs.map(([v, ic], i) => {
             const label = v === "checkin" ? "Players" : v === "rules" ? "Rules" : v;
             const isActive = view === v;
@@ -1060,11 +1060,11 @@ function RulesV() {
             <Row title="Disputes" body="If a situation isn't covered, default to the DRA House &quot;Bar&quot; Rules. Universal rule: if there's a dispute — replay the shot. No exceptions." last />
           </Section>
           <Section title="League Format">
-            <Row title="Box Structure" body="Players are grouped into boxes of up to 4. Full round-robin within each box — 3 matches per round. New/returning players start in the Swing Box." />
-            <Row title="Promotion & Relegation" body="Boxes are re-seeded each round based on ladder rank — the top-ranked players form Box 1, working down to the Swing Box. Win matches and earn points to climb the standings and earn a spot in a higher box next round. New players start in the Swing Box." />
-            <Row title="Wild Cards" body="Each player gets 1 wild card cross-box match per round, randomly assigned." />
-            <Row title="Open Challenges" body="Open Challenges are unlimited — challenge anyone in the office for 2 bonus points. No penalty for a loss." />
-            <Row title="Inactivity" body="No match in 42 days → marked inactive and dropped to the bottom of the standings." last />
+            <Row title="Summer Season" body="The DRA Pool League runs from Memorial Day weekend through Labor Day — a defined start and end, with a champion crowned at season's end." />
+            <Row title="Round Robin Rounds" body="Each round is 2 weeks long. At the start of every round, players are randomly assigned into groups of up to 4 for a full round-robin (3 matches per round). New random groups every round — no carryover." />
+            <Row title="Cumulative Points" body="Points accumulate across all seeding rounds. Your total determines your seed entering the season-ending tournament bracket." />
+            <Row title="14-Day No-Play Rule" body="Each round has a 14-day play window. If you do not complete any match within the window, you are automatically moved to the bottom of the standings. No makeups, no exceptions." />
+            <Row title="Tournament Bracket" body="After all seeding rounds, the top players enter a single-elimination bracket seeded by cumulative points. The bracket runs through Labor Day and crowns a champion." last />
           </Section>
           <Section title="DRA House Bar Rules" color={P.blue}>
             {houseRules.map(([title, body], i) => (
@@ -1116,30 +1116,12 @@ function RulesV() {
               ))}
             </div>
           </Section>
-          <Section title="Open Challenges">
-            <div style={{ borderRadius: 12, overflow: "hidden", border: "1px solid rgba(255,255,255,.1)" }}>
-              {[
-                ["Win", "Defeat any opponent in an open challenge", "+2 pts", P.blue],
-                ["Loss", "Open challenge loss — no penalty", "0 pts", P.dim],
-              ].map(([result, desc, pts, color], i) => (
-                <div key={result} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", background: i % 2 === 0 ? "rgba(0,48,82,.4)" : "transparent", borderBottom: i < 1 ? "1px solid rgba(255,255,255,.05)" : "none" }}>
-                  <div style={{ flex: 1 }}>
-                    <p style={{ fontSize: 13, fontWeight: 700, color: P.off, marginBottom: 2 }}>{result}</p>
-                    <p style={{ fontSize: 10, color: P.dim }}>{desc}</p>
-                  </div>
-                  <span style={{ fontSize: 20, fontWeight: 700, color, minWidth: 48, textAlign: "right" }}>{pts}</span>
-                </div>
-              ))}
-            </div>
-          </Section>
           <div style={{ ...gc, background: "rgba(21,152,203,.06)", border: "1px solid rgba(21,152,203,.2)" }}>
             <h4 style={{ fontSize: 13, fontWeight: 700, color: P.blue, marginBottom: 10 }}>Best Possible Round</h4>
             <p style={{ fontSize: 12, color: P.grey, lineHeight: 1.8 }}>
-              3× shutout box wins (3 × 5) → <span style={{ color: P.orange, fontWeight: 700 }}>15 pts</span><br />
-              Box winner bonus → <span style={{ color: P.orange, fontWeight: 700 }}>+3 pts</span><br />
-              Wild card shutout win → <span style={{ color: P.orange, fontWeight: 700 }}>+5 pts</span><br />
-              <span style={{ color: P.off, fontWeight: 700, fontSize: 13 }}>Box/WC total: 23 pts</span><br />
-              <span style={{ color: P.blue, fontSize: 11 }}>+ Open challenges: +2 pts each (unlimited)</span>
+              3× shutout wins (3 × 5) → <span style={{ color: P.orange, fontWeight: 700 }}>15 pts</span><br />
+              Group winner bonus → <span style={{ color: P.orange, fontWeight: 700 }}>+3 pts</span><br />
+              <span style={{ color: P.off, fontWeight: 700, fontSize: 13 }}>Round max: 18 pts</span>
             </p>
           </div>
         </div>
