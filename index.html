@@ -945,7 +945,7 @@ function BoxesV({ st, gn, ini, logR, ffM }) {
 function MatchesV({ st, gn, logR, ffM }) {
   const [sc, setSc] = useState(null); const [s1, setS1] = useState(2); const [s2, setS2] = useState(0); const [ffConf, setFfConf] = useState(null);
   const [filterPlayer, setFilterPlayer] = useState(null);
-  if (!st.cycleNumber) return <div style={{ textAlign: "center", padding: 50 }}><p style={{ fontSize: 44 }}>{"\ud83d\udcc5"}</p><p style={{ color: P.grey }}>No active round.</p></div>;
+  if (!st.boxes || !st.boxes.length) return <div style={{ textAlign: "center", padding: 50 }}><p style={{ fontSize: 44 }}>{"\ud83c\udfb1"}</p><p style={{ color: P.grey, marginBottom: 6 }}>No active round</p><p style={{ fontSize: 11, color: P.dim }}>The admin will start the next round once enough players have checked in.</p></div>;
   const valid = (s1 === 2 && s2 < 2) || (s2 === 2 && s1 < 2);
   const sub = (id, list) => { if (valid) { logR(id, s1, s2, list); setSc(null); setS1(2); setS2(0); } };
   const rm = (m, list, label, color) => {
