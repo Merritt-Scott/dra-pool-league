@@ -377,7 +377,7 @@ function App() {
   const ladder = useMemo(() => st ? calcLad(st.players, st) : [], [st]);
   const activeIds = st ? new Set([...(st.boxes || []).flatMap(b => b.players), ...(st.boxMatches || []).filter(m => m.completed).flatMap(m => [m.player1, m.player2])]) : new Set();
   const activeLad = ladder.filter(s => activeIds.has(s.id));
-  const gn = (id) => { if (!st) return "?"; const p = st.players.find(x => x.id === id); return p ? p.name : "?"; };
+  const gn = (id) => { if (!st || !id) return "?"; if (id === "BYE") return "BYE"; const p = st.players.find(x => x.id === id); return p ? p.name : "Unknown"; };
   const ini = (id) => gn(id).split(" ").map(w => w[0]).join("").toUpperCase().slice(0, 3);
   if (!st) return <div style={{ background: P.navy, minHeight: "100vh", padding: "60px 14px" }}>
     <style>{"@keyframes spin{to{transform:rotate(360deg)}} @keyframes shimmerLoad{0%{background-position:200% center}100%{background-position:-200% center}}"}</style>
@@ -1310,18 +1310,32 @@ function BracketV({ st, gn, recordBracket, bracketUnlocked, completedRounds, see
                   const playable = !m.completed && !m.isBye && m.player1 && m.player2;
                   const isWin1 = m.completed && m.winner === m.player1;
                   const isWin2 = m.completed && m.winner === m.player2;
+                  const isPending = !m.player1 && !m.player2;
+                  const slotLabel = (pid, isBye) => {
+                    if (isBye) return <span style={{ color: P.dim, fontStyle: "italic", letterSpacing: 1 }}>— bye —</span>;
+                    if (!pid) return <span style={{ color: P.dim, fontStyle: "italic", letterSpacing: 1 }}>Awaiting winner</span>;
+                    return gn(pid);
+                  };
+                  // Slim "Awaiting" card for matches with no players yet
+                  if (isPending) {
+                    return (
+                      <div key={m.id} style={{ background: "rgba(255,255,255,.015)", border: "1px dashed rgba(255,255,255,.12)", borderRadius: 10, padding: "16px 10px", textAlign: "center", opacity: 0.6 }}>
+                        <p style={{ fontSize: 10, color: P.dim, letterSpacing: 1, fontStyle: "italic" }}>Awaiting winners</p>
+                      </div>
+                    );
+                  }
                   return (
-                    <div key={m.id} style={{ background: m.isBye ? "rgba(255,255,255,.02)" : "rgba(0,20,40,.55)", border: "1px solid " + (isActive ? P.amber : "rgba(255,255,255,.08)"), borderRadius: 10, overflow: "hidden", opacity: m.isBye ? 0.55 : 1 }}>
+                    <div key={m.id} style={{ background: m.isBye ? "rgba(255,255,255,.015)" : "rgba(0,20,40,.55)", border: "1px solid " + (isActive ? P.amber : "rgba(255,255,255,.08)"), borderRadius: 10, overflow: "hidden", opacity: m.isBye ? 0.55 : 1, boxShadow: isActive ? "0 0 18px rgba(255,184,0,.25)" : "none", transition: "box-shadow .2s, border-color .2s" }}>
                       {/* Player 1 row */}
-                      <div onClick={() => playable && setActiveId(activeId === m.id ? null : m.id)} style={{ display: "flex", alignItems: "center", padding: "8px 10px", borderBottom: "1px solid rgba(255,255,255,.05)", cursor: playable ? "pointer" : "default", background: isWin1 ? "rgba(255,184,0,.08)" : "transparent" }}>
-                        <span style={{ fontSize: 9, color: P.dim, width: 22 }}>{m.seed1 ? "#" + m.seed1 : ""}</span>
-                        <span style={{ flex: 1, fontSize: 12, fontWeight: isWin1 ? 700 : 500, color: m.player1 === "BYE" ? P.dim : (isWin1 ? P.white : P.off), fontStyle: m.player1 === "BYE" ? "italic" : "normal" }}>{m.player1 ? (m.player1 === "BYE" ? "BYE" : gn(m.player1)) : <span style={{ color: P.dim }}>TBD</span>}</span>
+                      <div onClick={() => playable && setActiveId(activeId === m.id ? null : m.id)} style={{ display: "flex", alignItems: "center", padding: "8px 10px", borderBottom: "1px solid rgba(255,255,255,.05)", cursor: playable ? "pointer" : "default", background: isWin1 ? "linear-gradient(90deg, rgba(255,184,0,.15), rgba(255,184,0,.05))" : "transparent" }}>
+                        <span style={{ fontSize: 9, color: P.dim, width: 22, fontWeight: 600 }}>{m.seed1 ? "#" + m.seed1 : ""}</span>
+                        <span style={{ flex: 1, fontSize: 12, fontWeight: isWin1 ? 700 : 500, color: m.player1 === "BYE" ? P.dim : (isWin1 ? P.white : P.off), overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{slotLabel(m.player1, m.player1 === "BYE")}</span>
                         {m.completed && <span style={{ fontSize: 13, fontWeight: 700, color: isWin1 ? P.amber : P.dim, width: 18, textAlign: "center" }}>{m.score1}</span>}
                       </div>
                       {/* Player 2 row */}
-                      <div onClick={() => playable && setActiveId(activeId === m.id ? null : m.id)} style={{ display: "flex", alignItems: "center", padding: "8px 10px", cursor: playable ? "pointer" : "default", background: isWin2 ? "rgba(255,184,0,.08)" : "transparent" }}>
-                        <span style={{ fontSize: 9, color: P.dim, width: 22 }}>{m.seed2 ? "#" + m.seed2 : ""}</span>
-                        <span style={{ flex: 1, fontSize: 12, fontWeight: isWin2 ? 700 : 500, color: m.player2 === "BYE" ? P.dim : (isWin2 ? P.white : P.off), fontStyle: m.player2 === "BYE" ? "italic" : "normal" }}>{m.player2 ? (m.player2 === "BYE" ? "BYE" : gn(m.player2)) : <span style={{ color: P.dim }}>TBD</span>}</span>
+                      <div onClick={() => playable && setActiveId(activeId === m.id ? null : m.id)} style={{ display: "flex", alignItems: "center", padding: "8px 10px", cursor: playable ? "pointer" : "default", background: isWin2 ? "linear-gradient(90deg, rgba(255,184,0,.15), rgba(255,184,0,.05))" : "transparent" }}>
+                        <span style={{ fontSize: 9, color: P.dim, width: 22, fontWeight: 600 }}>{m.seed2 ? "#" + m.seed2 : ""}</span>
+                        <span style={{ flex: 1, fontSize: 12, fontWeight: isWin2 ? 700 : 500, color: m.player2 === "BYE" ? P.dim : (isWin2 ? P.white : P.off), overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{slotLabel(m.player2, m.player2 === "BYE")}</span>
                         {m.completed && <span style={{ fontSize: 13, fontWeight: 700, color: isWin2 ? P.amber : P.dim, width: 18, textAlign: "center" }}>{m.score2}</span>}
                       </div>
                       {/* Score entry expanded */}
