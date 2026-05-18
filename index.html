@@ -346,8 +346,8 @@ function App() {
         <div style={{ position: "absolute", width: 300, height: 300, borderRadius: "50%", background: "radial-gradient(circle, rgba(0,200,180,.08) 0%, transparent 65%)", bottom: "-80px", right: "20%", animation: "orbFloat3 10s ease-in-out infinite" }} />
       </div>
       <div style={{ position: "sticky", top: 0, zIndex: 8, background: "rgba(255,255,255,.06)", backdropFilter: "blur(20px) saturate(150%)", WebkitBackdropFilter: "blur(20px) saturate(150%)", borderBottom: "1px solid rgba(255,255,255,.12)", boxShadow: "0 2px 20px rgba(0,0,0,.2), inset 0 1px 0 rgba(255,255,255,.15)", display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 18px", animation: "slideDown .2s ease-out" }}>
-        {st.cycleStart ? <span style={{ fontSize: 11, fontWeight: 700, color: P.orange }}>Round {st.cycleNumber}</span> : <span style={{ fontSize: 11, color: P.dim }}>DRA Pool</span>}
-        {st.cycleStart ? <span style={{ fontSize: 11, color: P.off }}>{cd.d}d {cd.h}h {cd.m}m left</span> : <span />}
+        {(st.boxes || []).length > 0 ? <span style={{ fontSize: 11, fontWeight: 700, color: P.orange }}>Round {st.cycleNumber}</span> : <span style={{ fontSize: 11, color: P.dim }}>DRA Pool</span>}
+        {(st.boxes || []).length > 0 ? <span style={{ fontSize: 11, color: P.off }}>{cd.d}d {cd.h}h {cd.m}m left</span> : <span />}
         <div style={{ display: "flex", alignItems: "center", gap: 2 }}>
           <button onClick={forceRefresh} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 16, padding: "2px 4px", opacity: .45, lineHeight: 1, transition: "transform .3s", transform: refreshing ? "rotate(360deg)" : "none" }}>↻</button>
           <button onClick={() => setShowQR(true)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 18, padding: "2px 4px", opacity: .45, lineHeight: 1 }}>📷</button>
@@ -364,7 +364,7 @@ function App() {
         </div>
       )}
       <main style={{ maxWidth: 600, margin: "0 auto", padding: "0 14px 110px", animation: "fadeIn .3s", position: "relative", zIndex: 1 }}>
-        {view === "home" && <Home st={st} ladder={activeLad} gn={gn} ini={ini} cd={cd} onJoin={() => { setView("checkin"); setNavIdx(3); setCheckInFocus(true); }} />}
+        {view === "home" && <Home st={st} ladder={ladder} gn={gn} ini={ini} cd={cd} onJoin={() => { setView("checkin"); setNavIdx(3); setCheckInFocus(true); }} />}
         {view === "boxes" && <BoxesV st={st} gn={gn} ini={ini} logR={logR} ffM={ffM} />}
         {view === "matches" && <MatchesV st={st} gn={gn} logR={logR} ffM={ffM} />}
         {view === "checkin" && <CheckInV st={st} ladder={ladder} togCI={togCI} selLast={selLast} autoOpen={checkInFocus} onAutoOpenDone={() => setCheckInFocus(false)} />}
@@ -559,11 +559,17 @@ function Home({ st, ladder, gn, ini, cd, onJoin }) {
       <header style={{ textAlign: "center", padding: "20px 0 12px" }}>
         <DRALogo />
         <p style={{ fontSize: 10, background: "linear-gradient(90deg," + P.orange + "," + P.amber + "," + P.blue + "," + P.orange + ")", backgroundSize: "300% 100%", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text", letterSpacing: 6, textTransform: "uppercase", marginTop: 8, fontWeight: 700, animation: "shimmer 4s linear infinite" }}>POOL LEAGUE</p>
-        {st.cycleNumber > 0 && (
+        {st.cycleNumber > 0 && (st.boxes || []).length > 0 && (
           <div style={{ ...gc, display: "inline-flex", gap: 16, marginTop: 10, padding: "6px 18px", borderRadius: 20, marginBottom: 0 }}>
             <span style={{ fontSize: 11, color: P.grey }}>Round {st.cycleNumber}</span>
             <span style={{ fontSize: 11, color: P.orange, fontWeight: 700 }}>{cd.d}d {cd.h}h {cd.m}m</span>
-            <span style={{ fontSize: 11, color: P.grey }}>{ladder.length} players</span>
+            <span style={{ fontSize: 11, color: P.grey }}>{ladder.filter(s => s.mp > 0).length} players</span>
+          </div>
+        )}
+        {st.cycleNumber > 0 && (st.boxes || []).length === 0 && (
+          <div style={{ ...gc, display: "inline-flex", gap: 16, marginTop: 10, padding: "6px 18px", borderRadius: 20, marginBottom: 0 }}>
+            <span style={{ fontSize: 11, color: P.ok, fontWeight: 700 }}>Round {st.cycleNumber} Complete</span>
+            <span style={{ fontSize: 11, color: P.grey }}>{ladder.filter(s => s.mp > 0).length} players ranked</span>
           </div>
         )}
       </header>
