@@ -19,7 +19,8 @@
 <body>
 <div id="root"></div>
 <script>
-firebase.initializeApp({apiKey:"AIzaSyBNyyd30H6tZf-G10f9z_qQX0GsOPM33Cc",authDomain:"dra-pool-league.firebaseapp.com",projectId:"dra-pool-league",storageBucket:"dra-pool-league.firebasestorage.app",messagingSenderId:"402808228822",appId:"1:402808228822:web:4bad583ff4f2f9e8087277"});
+  firebase.initializeApp({apiKey:"AIzaSyBNyyd30H6tZf-G10f9z_qQX0GsOPM33Cc",authDomain:"dra-pool-league.firebaseapp.com",projectId:"dra-pool-league",storageBucket:"dra-pool-league.firebasestorage.app",messagingSenderId:"402808228822",appId:"1:402808228822:web:4bad583ff4f2f9e8087277"});
+  var db=firebase.firestore();var DOC_REF=db.collection("league").doc("state");
 </script>
 <script type="text/babel">
 const { useState, useEffect, useCallback, useMemo } = React;
