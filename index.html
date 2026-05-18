@@ -42,33 +42,6 @@ function buildBoxes(ids, lad, randomize = false) {
   return bx;
 }
 function genBM(boxes) { const m = []; boxes.forEach((b, bi) => { for (let i = 0; i < b.players.length; i++) for (let j = i + 1; j < b.players.length; j++) m.push({ id: uid(), type: "box", box: bi, boxName: b.name, player1: b.players[i], player2: b.players[j], score1: null, score2: null, completed: false, completedAt: null }); }); return m; }
-function genWC(boxes) {
-  if (boxes.length < 2) return [];
-  const wc = [], used = new Set();
-  let all = boxes.flatMap((b, bi) => b.players.map(p => ({ id: p, box: bi })));
-  if (all.length % 2 !== 0) {
-    let removeIdx = -1;
-    for (let i = all.length - 1; i >= 0; i--) { if (boxes[all[i].box] && boxes[all[i].box].isSwing) { removeIdx = i; break; } }
-    if (removeIdx === -1) removeIdx = all.length - 1;
-    all.splice(removeIdx, 1);
-  }
-  // Try multiple shuffles to maximize pairings
-  let bestWC = [], bestUsed = new Set();
-  for (let attempt = 0; attempt < 3; attempt++) {
-    const sh = shuf(all);
-    const tryWC = [], tryUsed = new Set();
-    for (const p of sh) {
-      if (tryUsed.has(p.id)) continue;
-      const c = sh.find(x => x.box !== p.box && !tryUsed.has(x.id));
-      if (!c) continue;
-      tryUsed.add(p.id); tryUsed.add(c.id);
-      tryWC.push({ id: uid(), type: "wildcard", player1: p.id, player2: c.id, score1: null, score2: null, completed: false, completedAt: null });
-    }
-    if (tryWC.length > bestWC.length) { bestWC = tryWC; bestUsed = tryUsed; }
-    if (tryUsed.size >= all.length) break; // All paired, no need to retry
-  }
-  return bestWC;
-}
 
 function boxSt(pids, matches) {
   const s = {}; pids.forEach(id => { s[id] = { id, pts: 0, w: 0, l: 0, rw: 0, rl: 0 }; });
@@ -87,9 +60,9 @@ function boxSt(pids, matches) {
 }
 
 function calcLad(players, st) {
-  const s = {}; players.forEach(p => { s[p.id] = { id: p.id, name: p.name, points: 0, boxPts: 0, openPts: 0, wins: 0, losses: 0, rw: 0, rl: 0, mp: 0, last: p.joinedAt, inactive: false, streak: 0 }; });
-  const all = [...(st.boxMatches || []), ...(st.wildCards || []), ...(st.openChallenges || [])];
-  (st.pastCycles || []).forEach(c => { [...(c.boxMatches || []), ...(c.wildCards || []), ...(c.openChallenges || [])].forEach(m => all.push(m)); (c.bonuses || []).forEach(b => { if (s[b.id]) s[b.id].points += b.pts; }); });
+  const s = {}; players.forEach(p => { s[p.id] = { id: p.id, name: p.name, points: 0, boxPts: 0, wins: 0, losses: 0, rw: 0, rl: 0, mp: 0, last: p.joinedAt, inactive: false, streak: 0, noPlay: false }; });
+  const all = [...(st.boxMatches || [])];
+  (st.pastCycles || []).forEach(c => { (c.boxMatches || []).forEach(m => all.push(m)); (c.bonuses || []).forEach(b => { if (s[b.id]) s[b.id].points += b.pts; }); });
   // Sort by completedAt for streak calc
   const sorted = all.filter(m => m.completed).sort((a, b) => (a.completedAt || "").localeCompare(b.completedAt || ""));
   sorted.forEach(m => {
@@ -97,26 +70,45 @@ function calcLad(players, st) {
     if (m.forfeit || (m.score1 === 0 && m.score2 === 0)) return;
     a.mp++; b.mp++; a.rw += m.score1; a.rl += m.score2; b.rw += m.score2; b.rl += m.score1;
     if (m.completedAt) { if (m.completedAt > a.last) a.last = m.completedAt; if (m.completedAt > b.last) b.last = m.completedAt; }
-    if (m.type === "open") {
-      if (m.score1 > m.score2) { a.points += 2; a.openPts += 2; a.wins++; b.losses++; a.streak = a.streak > 0 ? a.streak + 1 : 1; b.streak = 0; }
-      else { b.points += 2; b.openPts += 2; b.wins++; a.losses++; b.streak = b.streak > 0 ? b.streak + 1 : 1; a.streak = 0; }
-    } else {
-      const w1 = m.score1 > m.score2; const wp = w1 ? (m.score2 === 0 ? 5 : 4) : (m.score1 === 0 ? 5 : 4); const lp = w1 ? (m.score2 > 0 ? 2 : 0) : (m.score1 > 0 ? 2 : 0);
-      if (w1) { a.points += wp; a.boxPts += wp; a.wins++; b.points += lp; b.boxPts += lp; b.losses++; a.streak = a.streak > 0 ? a.streak + 1 : 1; b.streak = 0; }
-      else { b.points += wp; b.boxPts += wp; b.wins++; a.points += lp; a.boxPts += lp; a.losses++; b.streak = b.streak > 0 ? b.streak + 1 : 1; a.streak = 0; } }
+    const w1 = m.score1 > m.score2; const wp = w1 ? (m.score2 === 0 ? 5 : 4) : (m.score1 === 0 ? 5 : 4); const lp = w1 ? (m.score2 > 0 ? 2 : 0) : (m.score1 > 0 ? 2 : 0);
+    if (w1) { a.points += wp; a.boxPts += wp; a.wins++; b.points += lp; b.boxPts += lp; b.losses++; a.streak = a.streak > 0 ? a.streak + 1 : 1; b.streak = 0; }
+    else { b.points += wp; b.boxPts += wp; b.wins++; a.points += lp; a.boxPts += lp; a.losses++; b.streak = b.streak > 0 ? b.streak + 1 : 1; a.streak = 0; }
   });
   if (st.boxes && st.boxMatches) { st.boxes.forEach((box, bi) => { const bm = st.boxMatches.filter(m => m.box === bi); const realBM = bm.filter(m => m.completed && !m.forfeit && !(m.score1 === 0 && m.score2 === 0)); if (realBM.length > 0 && bm.every(m => m.completed)) { const bs = boxSt(box.players, realBM); if (bs[0] && s[bs[0].id]) { s[bs[0].id].points += 3; s[bs[0].id].boxPts += 3; } if (bs[1] && s[bs[1].id]) { s[bs[1].id].points += 1; s[bs[1].id].boxPts += 1; } } }); }
   (st.pastCycles || []).forEach(c => { (c.bonuses || []).forEach(b => { if (s[b.id] && b.pts > 0) s[b.id].boxPts += b.pts; }); });
+  // 42-day inactivity flag (long-term absent)
   const t = nw(); players.forEach(p => { if (s[p.id].last && dd(t, s[p.id].last) > 42) s[p.id].inactive = true; });
+  // 14-day no-play penalty: if a round is active and a player checked in but has zero completed real matches
+  // for that round when the round duration has elapsed, they are flagged as noPlay and moved to bottom.
+  if (st.cycleStart && st.boxes && st.boxes.length > 0) {
+    const roundElapsedDays = dd(nw(), st.cycleStart);
+    const roundDurDays = (st.cycleDurationWeeks || 2) * 7;
+    if (roundElapsedDays >= roundDurDays) {
+      const activeIds = new Set(st.boxes.flatMap(b => b.players));
+      activeIds.forEach(id => {
+        if (!s[id]) return;
+        const played = (st.boxMatches || []).some(m => (m.player1 === id || m.player2 === id) && m.completed && !m.forfeit && !(m.score1 === 0 && m.score2 === 0));
+        if (!played) s[id].noPlay = true;
+      });
+    }
+  }
   const h2hMap = buildH2HMap(st);
-  return Object.values(s).sort((a, b) => { if (a.inactive !== b.inactive) return a.inactive ? 1 : -1; if (b.points !== a.points) return b.points - a.points; const h2h = getH2H(a.id, b.id, st, h2hMap); if (h2h && h2h.w1 !== h2h.w2) return h2h.w2 - h2h.w1; return b.wins - a.wins || b.rw - a.rw; });
+  return Object.values(s).sort((a, b) => {
+    // noPlay players go to absolute bottom (below inactive)
+    if (a.noPlay !== b.noPlay) return a.noPlay ? 1 : -1;
+    if (a.inactive !== b.inactive) return a.inactive ? 1 : -1;
+    if (b.points !== a.points) return b.points - a.points;
+    const h2h = getH2H(a.id, b.id, st, h2hMap);
+    if (h2h && h2h.w1 !== h2h.w2) return h2h.w2 - h2h.w1;
+    return b.wins - a.wins || b.rw - a.rw;
+  });
 }
 
 // Build H2H lookup table in a single pass — O(m) instead of O(n^2 * m) when used in sort
 function buildH2HMap(st) {
   const map = {};
-  const all = [...(st.boxMatches || []), ...(st.wildCards || []), ...(st.openChallenges || [])];
-  (st.pastCycles || []).forEach(c => { [...(c.boxMatches || []), ...(c.wildCards || []), ...(c.openChallenges || [])].forEach(m => all.push(m)); });
+  const all = [...(st.boxMatches || [])];
+  (st.pastCycles || []).forEach(c => { (c.boxMatches || []).forEach(m => all.push(m)); });
   all.filter(m => m.completed && !m.forfeit && !(m.score1 === 0 && m.score2 === 0)).forEach(m => {
     const k1 = m.player1 + ":" + m.player2;
     const k2 = m.player2 + ":" + m.player1;
@@ -130,8 +122,8 @@ function buildH2HMap(st) {
 // Head-to-head record between two players (uses pre-built map if provided)
 function getH2H(p1, p2, st, h2hMap) {
   if (h2hMap) { const r = h2hMap[p1 + ":" + p2]; return r && (r.w1 || r.w2) ? r : null; }
-  const all = [...(st.boxMatches || []), ...(st.wildCards || []), ...(st.openChallenges || [])];
-  (st.pastCycles || []).forEach(c => { [...(c.boxMatches || []), ...(c.wildCards || []), ...(c.openChallenges || [])].forEach(m => all.push(m)); });
+  const all = [...(st.boxMatches || [])];
+  (st.pastCycles || []).forEach(c => { (c.boxMatches || []).forEach(m => all.push(m)); });
   let w1 = 0, w2 = 0;
   all.filter(m => m.completed && !m.forfeit && !(m.score1 === 0 && m.score2 === 0)).forEach(m => {
     if (m.player1 === p1 && m.player2 === p2) { if (m.score1 > m.score2) w1++; else w2++; }
@@ -143,18 +135,14 @@ function getH2H(p1, p2, st, h2hMap) {
 
 // ELO rating system — score-margin weighted, provisional K, per-match deltas
 function calcElo(players, st) {
-  const K_BOX = 32, K_WC = 24, K_OPEN = 16, K_PROV = 48, PROV = 8, BASE = 1000;
+  const K_BOX = 32, K_PROV = 48, PROV = 8, BASE = 1000;
   const ratings = {}, played = {}, deltas = {};
   players.forEach(p => { ratings[p.id] = BASE; played[p.id] = 0; });
   const all = [];
   (st.pastCycles || []).forEach(c => {
     (c.boxMatches || []).forEach(m => all.push({ ...m, _k: K_BOX }));
-    (c.wildCards || []).forEach(m => all.push({ ...m, _k: K_WC }));
-    (c.openChallenges || []).forEach(m => all.push({ ...m, _k: K_OPEN }));
   });
   (st.boxMatches || []).forEach(m => all.push({ ...m, _k: K_BOX }));
-  (st.wildCards || []).forEach(m => all.push({ ...m, _k: K_WC }));
-  (st.openChallenges || []).forEach(m => all.push({ ...m, _k: K_OPEN }));
   all.filter(m => m.completed && !m.forfeit && (m.score1 + m.score2) > 0 && ratings[m.player1] !== undefined && ratings[m.player2] !== undefined)
     .sort((a, b) => (a.completedAt || "").localeCompare(b.completedAt || ""))
     .forEach(m => {
@@ -199,10 +187,10 @@ function getChampions(st, gn) {
 
 
 const PLAYERS = ["Gianna Acitelli","Elvira Aguillon","Koula Angelinas","Jean Marie Apruzzese","Gerard Apruzzese","Frank Banta","Bart Bess","Glen Besser","Sreyansh Biswal","Amanda Bloshuk","Eduardo Bonilla","Jason Borreo","Brad Boyle","Adam Breen","Duncan Brennan","Kenneth Carpenter","Hans Castaneda","Miguel Castro","Karen Chen","Steven Ciardiello","Dan Conlisk","Christopher Cook","Bridget Cooney","Rafael Cordero","Mike Cottam","Nicholas Cresta","Shawn Dacey","Zahra Derrick","James Driscoll","Matthew Farina","Susan Fattorusso","Lucy Ferrantelli","Sandy French","Daniel Giordano","Daniel Goldman","Brett Gottlieb","Korey Grabowski","Daniel Graham","David Gray","Andrew Grider","Max Gustafson","John Haaf","Melissa Haime","Christopher Halloran","William Hankers","Jake Hannah","Lauren Hayes","Anthony Helmandollar","Ian Holland","Hussein Hussein","Robert Hyman","Peter Ibelli","Patrick Judge","Brian Kittner","Sam Klaber","Jared Konigsberg","John Kopans","Werner Kratovil","Jonathan Lea","Jeffrey Lehrman","Christopher Lepore","Wei Lin","Jack Linehan","David Luski","Jason Luski","Shayne Lyons","Sloan Martin","Gabriella Mascellino","Quinn McQuade","Adam Melnick","Mario Minera","Anna Ming","Cristin Mitchell","Melanie Mohr","Indira Negron","Payton Odom","Peter Papadakos","Anjali Pharsi","Regina Poniros","Delaney Reynolds","Stephanie Rivera","Janine Roberts","Maria Rodriguez","Charles Ruotolo","Michelle Santos","Merritt Scott","John Serzan","Tracy Shi","Matt Shore","Tracy Sonnabend","Kim Stirba","Carol Su","Stephen Suriano","Aaron Talan","Amanda Taylor","Anthony Venditti","Ivan Vidal","Hope Wasserman","Andrew Wietstock","Liying Yang","Thomas Yang","Ashley Yip","Michael Yurick"].map(n => ({ id: uid(), name: n, joinedAt: nw() }));
-const DEF = { players: PLAYERS, boxes: [], boxMatches: [], wildCards: [], openChallenges: [], checkedIn: [], pastCycles: [], cycleNumber: 0, cycleStart: null, cycleDurationWeeks: 4, auditLog: [], adminPin: null, announcement: null };
+const DEF = { players: PLAYERS, boxes: [], boxMatches: [], checkedIn: [], pastCycles: [], cycleNumber: 0, cycleStart: null, cycleDurationWeeks: 2, auditLog: [], adminPin: null, announcement: null, seasonStart: null, seasonEnd: null, seasonName: "" };
 const withLog = (s, action, details) => { const al = [...(s.auditLog || []), { id: uid(), ts: nw(), action, details }]; return { ...s, auditLog: al.length > 200 ? al.slice(-200) : al }; };
 
-function useCD(cycleStart, weeks) { const [r, setR] = useState({ d: 0, h: 0, m: 0 }); useEffect(() => { const tick = () => { if (!cycleStart) { setR({ d: 0, h: 0, m: 0 }); return; } const end = new Date(new Date(cycleStart).getTime() + (weeks || 4) * 7 * 864e5); const diff = Math.max(0, end.getTime() - Date.now()); setR({ d: Math.floor(diff / 864e5), h: Math.floor((diff % 864e5) / 36e5), m: Math.floor((diff % 36e5) / 6e4) }); }; tick(); const id = setInterval(tick, 6e4); return () => clearInterval(id); }, [cycleStart, weeks]); return r; }
+function useCD(cycleStart, weeks) { const [r, setR] = useState({ d: 0, h: 0, m: 0 }); useEffect(() => { const tick = () => { if (!cycleStart) { setR({ d: 0, h: 0, m: 0 }); return; } const end = new Date(new Date(cycleStart).getTime() + (weeks || 2) * 7 * 864e5); const diff = Math.max(0, end.getTime() - Date.now()); setR({ d: Math.floor(diff / 864e5), h: Math.floor((diff % 864e5) / 36e5), m: Math.floor((diff % 36e5) / 6e4) }); }; tick(); const id = setInterval(tick, 6e4); return () => clearInterval(id); }, [cycleStart, weeks]); return r; }
 
 const gc = { background: "rgba(255,255,255,.05)", backdropFilter: "blur(28px) saturate(160%) brightness(1.05)", WebkitBackdropFilter: "blur(28px) saturate(160%) brightness(1.05)", border: "1px solid rgba(255,255,255,.12)", borderTop: "1px solid rgba(255,255,255,.22)", borderRadius: 20, padding: 16, marginBottom: 12, boxShadow: "0 8px 40px rgba(0,0,0,.35), inset 0 1px 0 rgba(255,255,255,.12)", transition: "transform .2s, box-shadow .2s" };
 const gt = { borderRadius: 16, overflow: "hidden", border: "1px solid rgba(255,255,255,.1)", borderTop: "1px solid rgba(255,255,255,.2)", background: "rgba(255,255,255,.04)", backdropFilter: "blur(20px)", WebkitBackdropFilter: "blur(20px)", boxShadow: "0 4px 24px rgba(0,0,0,.25)" };
@@ -214,7 +202,7 @@ const bcS = { display: "block", width: "100%", marginTop: 4, padding: 7, backgro
 const ssS = { width: "100%", padding: "11px 12px", background: "rgba(255,255,255,.05)", border: "1px solid rgba(255,255,255,.12)", borderRadius: 12, color: P.off, fontSize: 14, marginBottom: 6, transition: "border-color .2s, box-shadow .2s" };
 const inpS = { flex: 1, padding: "11px 14px", background: "rgba(255,255,255,.05)", border: "1px solid rgba(255,255,255,.12)", borderRadius: 12, color: P.off, fontSize: 14, outline: "none", transition: "border-color .2s, box-shadow .2s" };
 
-const DRALogo = () => <img src="https://jluski.github.io/DRA-Pool/logo_white.png" alt="DRA Advisors" style={{ display: "block", margin: "0 auto", width: 160, height: "auto" }} />;
+const DRALogo = () => <img src="logo_white.png" alt="DRA Advisors" style={{ display: "block", margin: "0 auto", width: 160, height: "auto" }} />;
 const Tt = ({ children }) => <h3 style={{ fontSize: 18, fontWeight: 300, color: P.white, marginBottom: 14, fontFamily: "Georgia,serif", letterSpacing: 2 }}>{children}</h3>;
 const Sub = ({ children }) => <h4 style={{ fontSize: 9, fontWeight: 700, color: P.orange, letterSpacing: 3, textTransform: "uppercase", margin: "18px 0 8px" }}>{children}</h4>;
 
@@ -257,7 +245,7 @@ function App() {
   const onTouchEnd = (e) => { if (e.changedTouches[0].clientY - touchStartY.current > 70 && window.scrollY === 0) forceRefresh(); };
   const cd = useCD(st?.cycleStart, st?.cycleDurationWeeks);
   const ladder = useMemo(() => st ? calcLad(st.players, st) : [], [st]);
-  const activeIds = st ? new Set([...(st.boxes || []).flatMap(b => b.players), ...(st.openChallenges || []).filter(m => m.completed).flatMap(m => [m.player1, m.player2]), ...(st.boxMatches || []).filter(m => m.completed).flatMap(m => [m.player1, m.player2]), ...(st.wildCards || []).filter(m => m.completed).flatMap(m => [m.player1, m.player2])]) : new Set();
+  const activeIds = st ? new Set([...(st.boxes || []).flatMap(b => b.players), ...(st.boxMatches || []).filter(m => m.completed).flatMap(m => [m.player1, m.player2])]) : new Set();
   const activeLad = ladder.filter(s => activeIds.has(s.id));
   const gn = (id) => { if (!st) return "?"; const p = st.players.find(x => x.id === id); return p ? p.name : "?"; };
   const ini = (id) => gn(id).split(" ").map(w => w[0]).join("").toUpperCase().slice(0, 3);
@@ -271,23 +259,22 @@ function App() {
   </div>;
 
   const addP = (n) => { if (!n.trim() || st.players.find(p => p.name.toLowerCase() === n.trim().toLowerCase())) { flash("Invalid/duplicate"); return; } const np = { id: uid(), name: n.trim(), joinedAt: nw() }; save(withLog({ ...st, players: [...st.players, np] }, "PLAYER_ADDED", n.trim())); flash(n.trim() + " joined!"); };
-  const rmP = (id) => { const nm = (st.players.find(p => p.id === id) || {}).name || id; const ns = { ...st, players: st.players.filter(p => p.id !== id), checkedIn: st.checkedIn.filter(c => c !== id), boxMatches: (st.boxMatches || []).map(m => (m.player1 === id || m.player2 === id) && !m.completed ? { ...m, score1: 0, score2: 0, completed: true, completedAt: nw(), forfeit: true } : m), wildCards: (st.wildCards || []).map(m => (m.player1 === id || m.player2 === id) && !m.completed ? { ...m, score1: 0, score2: 0, completed: true, completedAt: nw(), forfeit: true } : m), openChallenges: (st.openChallenges || []).map(m => (m.player1 === id || m.player2 === id) && !m.completed ? { ...m, score1: 0, score2: 0, completed: true, completedAt: nw(), forfeit: true } : m) }; save(withLog(ns, "PLAYER_REMOVED", nm)); flash("Removed"); };
+  const rmP = (id) => { const nm = (st.players.find(p => p.id === id) || {}).name || id; const ns = { ...st, players: st.players.filter(p => p.id !== id), checkedIn: st.checkedIn.filter(c => c !== id), boxMatches: (st.boxMatches || []).map(m => (m.player1 === id || m.player2 === id) && !m.completed ? { ...m, score1: 0, score2: 0, completed: true, completedAt: nw(), forfeit: true } : m) }; save(withLog(ns, "PLAYER_REMOVED", nm)); flash("Removed"); };
   const togCI = (id) => { if (!st.players.some(p => p.id === id)) return; const checked = st.checkedIn.includes(id); save(withLog({ ...st, checkedIn: checked ? st.checkedIn.filter(c => c !== id) : [...st.checkedIn, id] }, "CHECKIN_TOGGLED", gn(id))); };
-  const selLast = () => { if (!st.pastCycles.length) { flash("No previous round"); return; } const lastC = st.pastCycles[st.pastCycles.length - 1]; const allM = [...(lastC.boxMatches || []), ...(lastC.wildCards || []), ...(lastC.openChallenges || [])].filter(m => m.completed && !m.forfeit && !(m.score1 === 0 && m.score2 === 0)); const ids = [...new Set(allM.flatMap(m => [m.player1, m.player2]))].filter(id => st.players.some(p => p.id === id)); if (!ids.length) { flash("No previous round"); return; } save(withLog({ ...st, checkedIn: ids }, "CHECKIN_AUTO_SELECT", ids.length + " players")); flash(ids.length + " from last round!"); };
+  const selLast = () => { if (!st.pastCycles.length) { flash("No previous round"); return; } const lastC = st.pastCycles[st.pastCycles.length - 1]; const allM = (lastC.boxMatches || []).filter(m => m.completed && !m.forfeit && !(m.score1 === 0 && m.score2 === 0)); const ids = [...new Set(allM.flatMap(m => [m.player1, m.player2]))].filter(id => st.players.some(p => p.id === id)); if (!ids.length) { flash("No previous round"); return; } save(withLog({ ...st, checkedIn: ids }, "CHECKIN_AUTO_SELECT", ids.length + " players")); flash(ids.length + " from last round!"); };
   const completeCyc = () => {
     const bon = [];
     if (st.boxes) st.boxes.forEach((box, bi) => { const bm = (st.boxMatches || []).filter(m => m.box === bi); const realBM = bm.filter(m => m.completed && !m.forfeit && !(m.score1 === 0 && m.score2 === 0)); if (realBM.length > 0 && bm.every(m => m.completed)) { const bs = boxSt(box.players, realBM); if (bs[0]) bon.push({ id: bs[0].id, pts: 3 }); if (bs[1]) bon.push({ id: bs[1].id, pts: 1 }); } });
-    const past = st.cycleNumber > 0 ? [...st.pastCycles, { cycle: st.cycleNumber, boxMatches: st.boxMatches || [], wildCards: st.wildCards || [], openChallenges: st.openChallenges || [], boxes: st.boxes || [], bonuses: [...bon], startedAt: st.cycleStart, randomized: st.cycleRandomized || false }] : st.pastCycles;
-    save(withLog({ ...st, pastCycles: past, boxes: [], boxMatches: [], wildCards: [], openChallenges: [] }, "CYCLE_COMPLETED", "Round " + st.cycleNumber));
+    const past = st.cycleNumber > 0 ? [...st.pastCycles, { cycle: st.cycleNumber, boxMatches: st.boxMatches || [], boxes: st.boxes || [], bonuses: [...bon], startedAt: st.cycleStart, randomized: true }] : st.pastCycles;
+    save(withLog({ ...st, pastCycles: past, boxes: [], boxMatches: [] }, "CYCLE_COMPLETED", "Round " + st.cycleNumber));
     flash("Round " + st.cycleNumber + " complete!");
   };
   const endEarlyCyc = () => {
     const bon = [];
     const afBM = (st.boxMatches || []).map(m => !m.completed ? { ...m, score1: 0, score2: 0, completed: true, completedAt: nw(), forfeit: true, autoForfeit: true } : m);
-    const afWC = (st.wildCards || []).map(m => !m.completed ? { ...m, score1: 0, score2: 0, completed: true, completedAt: nw(), forfeit: true, autoForfeit: true } : m);
     if (st.boxes) st.boxes.forEach((box, bi) => { const bm = afBM.filter(m => m.box === bi); const realBM = bm.filter(m => m.completed && !m.forfeit && !(m.score1 === 0 && m.score2 === 0)); if (realBM.length > 0) { const bs = boxSt(box.players, realBM); if (bs[0]) bon.push({ id: bs[0].id, pts: 3 }); if (bs[1]) bon.push({ id: bs[1].id, pts: 1 }); } });
-    const past = [...st.pastCycles, { cycle: st.cycleNumber, boxMatches: afBM, wildCards: afWC, openChallenges: st.openChallenges || [], boxes: st.boxes || [], bonuses: [...bon], startedAt: st.cycleStart, randomized: st.cycleRandomized || false }];
-    save(withLog({ ...st, pastCycles: past, boxes: [], boxMatches: [], wildCards: [], openChallenges: [] }, "CYCLE_ENDED_EARLY", "Round " + st.cycleNumber));
+    const past = [...st.pastCycles, { cycle: st.cycleNumber, boxMatches: afBM, boxes: st.boxes || [], bonuses: [...bon], startedAt: st.cycleStart, randomized: true }];
+    save(withLog({ ...st, pastCycles: past, boxes: [], boxMatches: [] }, "CYCLE_ENDED_EARLY", "Round " + st.cycleNumber));
     flash("Round " + st.cycleNumber + " ended.");
   };
   // Build the archive object for the current round (dry-run, no save)
@@ -295,105 +282,42 @@ function App() {
     if (st.cycleNumber > 0 && (st.boxes || []).length > 0) {
       const bon = [];
       const afBM = (st.boxMatches || []).map(m => !m.completed ? { ...m, score1: 0, score2: 0, completed: true, completedAt: nw(), forfeit: true, autoForfeit: true } : m);
-      const afWC = (st.wildCards || []).map(m => !m.completed ? { ...m, score1: 0, score2: 0, completed: true, completedAt: nw(), forfeit: true, autoForfeit: true } : m);
       if (st.boxes) st.boxes.forEach((box, bi) => { const bm = afBM.filter(m => m.box === bi); const realBM = bm.filter(m => m.completed && !m.forfeit && !(m.score1 === 0 && m.score2 === 0)); if (realBM.length > 0) { const bs = boxSt(box.players, realBM); if (bs[0]) bon.push({ id: bs[0].id, pts: 3 }); if (bs[1]) bon.push({ id: bs[1].id, pts: 1 }); } });
-      return [...st.pastCycles, { cycle: st.cycleNumber, boxMatches: afBM, wildCards: afWC, openChallenges: st.openChallenges || [], boxes: st.boxes || [], bonuses: [...bon], startedAt: st.cycleStart, randomized: st.cycleRandomized || false }];
+      return [...st.pastCycles, { cycle: st.cycleNumber, boxMatches: afBM, boxes: st.boxes || [], bonuses: [...bon], startedAt: st.cycleStart, randomized: true }];
     }
     return st.pastCycles;
   };
-  // Compute seeded boxes for admin preview — does NOT write to Firestore
-  const previewCyc = (randomize = false) => {
+  // Compute random boxes for admin preview — does NOT write to Firestore
+  const previewCyc = () => {
     if (st.checkedIn.length < 4) { flash("Need 4+"); return null; }
     if (st.cycleNumber > 0 && (st.boxes || []).length > 0) { flash("Round already in progress"); return null; }
     const past = buildArchive();
-    const nl = calcLad(st.players, { ...st, pastCycles: past, boxMatches: [], wildCards: [], openChallenges: [], boxes: [] });
-    const lastSeeded = [...past].reverse().find(c => !c.randomized);
-    let adjustedNl = nl;
-    const adj = {};
-    let eloResult = null; let eloFrac = {};
-    if (!randomize && lastSeeded) {
-      const numBoxes = lastSeeded.boxes.length;
-      lastSeeded.boxes.forEach((box, bi) => {
-        const bm = (lastSeeded.boxMatches || []).filter(m => m.box === bi);
-        // Only real (non-forfeit, non-zero) matches count; threshold scales with box size
-        const realMatches = bm.filter(m => m.completed && !m.forfeit && !(m.score1 === 0 && m.score2 === 0));
-        const threshold = Math.ceil(box.players.length / 2);
-        if (realMatches.length < threshold) return;
-        const standing = boxSt(box.players, realMatches);
-        if (!standing.length) return;
-        if (bi > 0 && standing[0]) adj[standing[0].id] = -4;
-        if (bi < numBoxes - 1 && standing[standing.length - 1]) adj[standing[standing.length - 1].id] = +4;
-      });
-      // Build last round's seed position map — the base for movement guarantees exactly ±1 box
-      const lastSeedPos = {}; let _pos = 0;
-      lastSeeded.boxes.forEach(box => { box.players.forEach(pid => { lastSeedPos[pid] = _pos++; }); });
-      // ELO as fractional tiebreaker [0, 0.99] — never independently crosses a box boundary
-      const ELO_MIN = 3;
-      eloResult = calcElo(st.players, { ...st, pastCycles: past, boxMatches: [], wildCards: [], openChallenges: [] });
-      const qualIds = st.checkedIn.filter(id => lastSeedPos[id] !== undefined && (eloResult.played[id] || 0) >= ELO_MIN);
-      const qualRatings = qualIds.map(id => eloResult.ratings[id] || 1000);
-      const eloMin = qualRatings.length > 1 ? Math.min(...qualRatings) : 1000;
-      const eloMax = qualRatings.length > 1 ? Math.max(...qualRatings) : 1000;
-      const eloRange = eloMax - eloMin;
-      st.checkedIn.forEach(id => {
-        if (lastSeedPos[id] === undefined || (eloResult.played[id] || 0) < ELO_MIN || eloRange === 0) { eloFrac[id] = 0; return; }
-        const norm = ((eloResult.ratings[id] || 1000) - eloMin) / eloRange; // 1.0 = highest ELO
-        eloFrac[id] = (1 - norm) * 0.99; // 0.0 = best ELO seed, 0.99 = worst
-      });
-      adjustedNl = nl
-        .map((p, i) => ({
-          ...p,
-          _seed: lastSeedPos[p.id] !== undefined
-            ? lastSeedPos[p.id] + (adj[p.id] || 0) + (eloFrac[p.id] || 0)
-            : 9999 + i // Absent/new players go to Swing Box
-        }))
-        .sort((a, b) => a._seed - b._seed);
-    }
-    // Build per-player seeding reason for admin preview UI
+    const nl = calcLad(st.players, { ...st, pastCycles: past, boxMatches: [], boxes: [] });
+    // Random box assignment — true round-robin format, fresh groups every round
     const playerReasons = {};
-    if (!randomize && lastSeeded) {
-      const checkedInSet = new Set(st.checkedIn);
-      lastSeeded.boxes.forEach((box, bi) => {
-        const bm = (lastSeeded.boxMatches || []).filter(m => m.box === bi);
-        const realBM = bm.filter(m => m.completed && !m.forfeit && !(m.score1 === 0 && m.score2 === 0));
-        const standing = realBM.length ? boxSt(box.players, realBM) : null;
-        box.players.forEach(pid => {
-          if (!checkedInSet.has(pid)) return;
-          const stEntry = standing ? standing.find(s => s.id === pid) : null;
-          const adjVal = adj[pid] || 0;
-          playerReasons[pid] = {
-            fromBox: bi + 1,
-            reason: adjVal < 0 ? "promoted" : adjVal > 0 ? "relegated" : "held",
-            lastRecord: stEntry ? stEntry.w + "W " + stEntry.l + "L" : null,
-          };
-        });
-      });
-      st.checkedIn.forEach(pid => {
-        if (playerReasons[pid]) return;
-        const everPlayed = past.some(c => [...(c.boxMatches || []), ...(c.wildCards || [])].some(m => m.player1 === pid || m.player2 === pid));
-        playerReasons[pid] = { reason: everPlayed ? "returning" : "new", fromBox: null, lastRecord: null };
-      });
-    }
-    return { randomize, suggestedBoxes: buildBoxes(st.checkedIn, adjustedNl, randomize), playerReasons, eloRatings: eloResult ? eloResult.ratings : {}, eloPlayed: eloResult ? eloResult.played : {}, eloFrac };
+    st.checkedIn.forEach(pid => {
+      const everPlayed = past.some(c => (c.boxMatches || []).some(m => m.player1 === pid || m.player2 === pid));
+      playerReasons[pid] = { reason: everPlayed ? "returning" : "new", fromBox: null, lastRecord: null };
+    });
+    return { randomize: true, suggestedBoxes: buildBoxes(st.checkedIn, nl, true), playerReasons, eloRatings: {}, eloPlayed: {}, eloFrac: {} };
   };
   // Confirm: save admin-approved (possibly adjusted) boxes to Firestore
   const confirmCyc = (finalBoxes, randomize, movedIds) => {
     const past = buildArchive();
     const stampedBoxes = finalBoxes.map(box => ({ ...box, manuallyPlaced: box.players.filter(id => movedIds.has(id)) }));
-    const bm = genBM(stampedBoxes); const wc = genWC(stampedBoxes);
-    const ns = { ...st, pastCycles: past, boxes: stampedBoxes, boxMatches: bm, wildCards: wc, openChallenges: [], checkedIn: [], cycleStart: nw(), cycleNumber: st.cycleNumber + 1, cycleRandomized: randomize };
+    const bm = genBM(stampedBoxes);
+    const ns = { ...st, pastCycles: past, boxes: stampedBoxes, boxMatches: bm, checkedIn: [], cycleStart: nw(), cycleNumber: st.cycleNumber + 1, cycleRandomized: true };
     save(withLog(ns, "CYCLE_STARTED", "Round " + (st.cycleNumber + 1)));
     flash("Round " + (st.cycleNumber + 1) + " started!");
   };
-  const undoCyc = () => { if (st.cycleNumber < 1) return; const prev = st.pastCycles[st.pastCycles.length - 1]; const restore = arr => (arr || []).map(m => m.autoForfeit ? { ...m, score1: null, score2: null, completed: false, completedAt: null, forfeit: false, autoForfeit: false } : m); const base = prev ? { ...st, pastCycles: st.pastCycles.slice(0, -1), boxes: prev.boxes || [], boxMatches: restore(prev.boxMatches), wildCards: restore(prev.wildCards), openChallenges: prev.openChallenges || [], checkedIn: [], cycleStart: prev.startedAt, cycleNumber: st.cycleNumber - 1 } : { ...st, boxes: [], boxMatches: [], wildCards: [], openChallenges: [], checkedIn: [], cycleStart: null, cycleNumber: 0 }; save(withLog(base, "CYCLE_UNDONE", "Round " + st.cycleNumber)); flash("Undone!"); };
+  const undoCyc = () => { if (st.cycleNumber < 1) return; const prev = st.pastCycles[st.pastCycles.length - 1]; const restore = arr => (arr || []).map(m => m.autoForfeit ? { ...m, score1: null, score2: null, completed: false, completedAt: null, forfeit: false, autoForfeit: false } : m); const base = prev ? { ...st, pastCycles: st.pastCycles.slice(0, -1), boxes: prev.boxes || [], boxMatches: restore(prev.boxMatches), checkedIn: [], cycleStart: prev.startedAt, cycleNumber: st.cycleNumber - 1 } : { ...st, boxes: [], boxMatches: [], checkedIn: [], cycleStart: null, cycleNumber: 0 }; save(withLog(base, "CYCLE_UNDONE", "Round " + st.cycleNumber)); flash("Undone!"); };
   const logR = (id, s1, s2, list) => { if (typeof s1 !== "number" || typeof s2 !== "number" || s1 < 0 || s2 < 0 || s1 > 2 || s2 > 2 || (s1 !== 2 && s2 !== 2) || s1 === s2) { flash("Invalid score"); return; } const m = st[list].find(x => x.id === id); const det = m ? gn(m.player1) + " " + s1 + "-" + s2 + " " + gn(m.player2) : id; const playerIds = new Set(st.players.map(p => p.id)); const newCI = m ? [...new Set([...st.checkedIn, m.player1, m.player2])].filter(id => playerIds.has(id)) : st.checkedIn; save(withLog({ ...st, [list]: st[list].map(m => m.id === id ? { ...m, score1: s1, score2: s2, completed: true, completedAt: nw(), forfeit: false } : m), checkedIn: newCI }, "MATCH_RECORDED", det)); flash(m ? gn(m.player1) + " " + s1 + "–" + s2 + " " + gn(m.player2) : "Recorded!"); };
   const ffM = (id, list) => { const m = st[list].find(x => x.id === id); const det = m ? gn(m.player1) + " vs " + gn(m.player2) : id; save(withLog({ ...st, [list]: st[list].map(m => m.id === id ? { ...m, score1: 0, score2: 0, completed: true, completedAt: nw(), forfeit: true } : m) }, "MATCH_FORFEIT", det)); flash(m ? gn(m.player1) + " vs " + gn(m.player2) + " — not played" : "Not played"); };
-  const newOC = (p1, p2) => { if (p1 === p2) { flash("Same player!"); return; } if ((st.openChallenges || []).find(m => !m.completed && ((m.player1 === p1 && m.player2 === p2) || (m.player1 === p2 && m.player2 === p1)))) { flash("Challenge already pending!"); return; } const oc = { id: uid(), type: "open", player1: p1, player2: p2, score1: null, score2: null, completed: false, completedAt: null }; save(withLog({ ...st, openChallenges: [...st.openChallenges, oc] }, "CHALLENGE_CREATED", gn(p1) + " vs " + gn(p2))); flash("Challenge created!"); };
   const resetAll = () => { save(DEF); flash("Reset!"); setView("home"); };
 
   const tabs = SPECTATOR
     ? [["home", "\ud83c\udfc6"], ["boxes", "\ud83d\udcca"], ["matches", "\ud83c\udfb1"], ["rules", "\ud83d\udcd6"]]
-    : [["home", "\ud83c\udfc6"], ["boxes", "\ud83d\udcca"], ["matches", "\ud83c\udfb1"], ["checkin", "\u2705"], ["rules", "\ud83d\udcd6"]];
+    : [["home", "\ud83c\udfc6"], ["boxes", "\ud83d\udcca"], ["matches", "\ud83c\udfb1"], ["challenge", "\u2694\ufe0f"], ["checkin", "\u2705"], ["rules", "\ud83d\udcd6"]];
 
   return (
     <div onTouchStart={onTouchStart} onTouchEnd={onTouchEnd} style={{ minHeight: "100vh", background: P.navy, color: P.off, fontFamily: "'DM Sans',Helvetica,sans-serif" }}>
@@ -443,14 +367,13 @@ function App() {
         {view === "home" && <Home st={st} ladder={activeLad} gn={gn} ini={ini} cd={cd} onJoin={() => { setView("checkin"); setNavIdx(4); setCheckInFocus(true); }} />}
         {view === "boxes" && <BoxesV st={st} gn={gn} ini={ini} logR={logR} ffM={ffM} />}
         {view === "matches" && <MatchesV st={st} gn={gn} logR={logR} ffM={ffM} />}
-        {view === "challenge" && <ChallengeV players={st.players} newOC={newOC} />}
         {view === "checkin" && <CheckInV st={st} ladder={ladder} togCI={togCI} selLast={selLast} autoOpen={checkInFocus} onAutoOpenDone={() => setCheckInFocus(false)} />}
         {view === "rules" && <RulesV />}
         {view === "admin" && <AdminV st={st} ladder={ladder} previewCyc={previewCyc} confirmCyc={confirmCyc} completeCyc={completeCyc} endEarlyCyc={endEarlyCyc} undoCyc={undoCyc} resetAll={resetAll} addP={addP} rmP={rmP} ffM={ffM} gn={gn} save={save} togCI={togCI} />}
       </main>
       <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 10, padding: "0 14px", paddingBottom: "max(10px, env(safe-area-inset-bottom))" }}>
         <nav style={{ display: "flex", justifyContent: "space-around", alignItems: "center", padding: "6px 4px", background: "rgba(255,255,255,.08)", backdropFilter: "blur(40px) saturate(200%)", WebkitBackdropFilter: "blur(40px) saturate(200%)", borderRadius: 28, border: "1px solid rgba(255,255,255,.18)", borderTop: "1px solid rgba(255,255,255,.28)", boxShadow: "0 8px 40px rgba(0,0,0,.4), inset 0 1px 0 rgba(255,255,255,.18)", position: "relative", marginBottom: 8, overflow: "hidden" }}>
-          <div style={{ position: "absolute", left: `calc(${navIdx} * (100% / 5) + 3px)`, width: "calc(100% / 5 - 6px)", top: 4, bottom: 4, borderRadius: 22, background: "rgba(255,255,255,.13)", border: "1px solid rgba(255,255,255,.22)", boxShadow: "inset 0 1px 0 rgba(255,255,255,.3)", transition: "left .28s cubic-bezier(.34,1.56,.64,1)", pointerEvents: "none" }} />
+          <div style={{ position: "absolute", left: `calc(${navIdx} * (100% / 6) + 3px)`, width: "calc(100% / 6 - 6px)", top: 4, bottom: 4, borderRadius: 22, background: "rgba(255,255,255,.13)", border: "1px solid rgba(255,255,255,.22)", boxShadow: "inset 0 1px 0 rgba(255,255,255,.3)", transition: "left .28s cubic-bezier(.34,1.56,.64,1)", pointerEvents: "none" }} />
           {tabs.map(([v, ic], i) => {
             const label = v === "checkin" ? "Players" : v === "rules" ? "Rules" : v;
             const isActive = view === v;
@@ -486,8 +409,8 @@ function PlayerCard({ pid, st, ladder, gn, eloData, getPlayerHistory, onClose })
   }, [st, pid]);
   const topH2H = useMemo(() => {
     const opp = {};
-    const all = [...(st.boxMatches || []), ...(st.wildCards || []), ...(st.openChallenges || [])];
-    (st.pastCycles || []).forEach(c => { [...(c.boxMatches || []), ...(c.wildCards || []), ...(c.openChallenges || [])].forEach(m => all.push(m)); });
+    const all = [...(st.boxMatches || [])];
+    (st.pastCycles || []).forEach(c => { (c.boxMatches || []).forEach(m => all.push(m)); });
     all.filter(m => m.completed && !m.forfeit && !(m.score1 === 0 && m.score2 === 0) && (m.player1 === pid || m.player2 === pid)).forEach(m => {
       const oid = m.player1 === pid ? m.player2 : m.player1; opp[oid] = (opp[oid] || 0) + 1;
     });
@@ -543,11 +466,10 @@ function Home({ st, ladder, gn, ini, cd, onJoin }) {
   const [showChampHistory, setShowChampHistory] = useState(false);
   const displayLad = ladder.filter(s => s.mp > 0 && (activeOnly ? !s.inactive : true));
   const eloData = useMemo(() => calcElo(st.players, st), [st]);
-  const prevElo = useMemo(() => { const prevSt = { ...st, boxMatches: [], wildCards: [], openChallenges: [] }; return calcElo(st.players, prevSt); }, [st]);
+  const prevElo = useMemo(() => { const prevSt = { ...st, boxMatches: [] }; return calcElo(st.players, prevSt); }, [st]);
   const ELO_MIN = 3;
   const eloRanked = [...st.players].filter(p => (eloData.played[p.id] || 0) >= ELO_MIN).sort((a, b) => (eloData.ratings[b.id] || 1000) - (eloData.ratings[a.id] || 1000));
   const eloRank = {}; eloRanked.forEach((p, i) => { eloRank[p.id] = i + 1; });
-  const last5 = (st.openChallenges || []).filter(m => m.completed).slice(-5).reverse();
   const getS = (bm, p1, p2) => { const m = bm.find(m => (m.player1 === p1 && m.player2 === p2) || (m.player1 === p2 && m.player2 === p1)); if (!m) return null; if (!m.completed) return { pending: true }; return { s1: m.player1 === p1 ? m.score1 : m.score2, s2: m.player1 === p1 ? m.score2 : m.score1 }; };
 
   const getPlayerHistory = (pid) => {
@@ -560,12 +482,12 @@ function Home({ st, ladder, gn, ini, cd, onJoin }) {
         const myScore  = isP1 ? m.score1 : m.score2;
         const oppScore = isP1 ? m.score2 : m.score1;
         const oppId    = isP1 ? m.player2 : m.player1;
-        const typeLabel = m.type === "wildcard" ? "Wild Card" : m.type === "open" ? "Open" : "Box";
+        const typeLabel = "Box";
         results.push({ id: m.id, oppName: gn(oppId), typeLabel, won: myScore > oppScore, myScore, oppScore, completedAt: m.completedAt || "", forfeit: !!m.forfeit });
       });
     };
-    collect(st.boxMatches); collect(st.wildCards); collect(st.openChallenges);
-    [...(st.pastCycles || [])].reverse().forEach(c => { collect(c.boxMatches); collect(c.wildCards); collect(c.openChallenges); });
+    collect(st.boxMatches);
+    [...(st.pastCycles || [])].reverse().forEach(c => { collect(c.boxMatches); });
     results.sort((a, b) => b.completedAt.localeCompare(a.completedAt));
     return results.slice(0, 10);
   };
@@ -585,13 +507,13 @@ function Home({ st, ladder, gn, ini, cd, onJoin }) {
     const complete = total > 0 && bm.every(m => m.completed);
     return { box, bi, done, total, bs, complete };
   });
-  const totalDone = (st.boxMatches || []).filter(m => m.completed && !m.forfeit).length + (st.wildCards || []).filter(m => m.completed && !m.forfeit).length;
-  const totalPend = (st.boxMatches || []).filter(m => !m.completed).length + (st.wildCards || []).filter(m => !m.completed).length;
+  const totalDone = (st.boxMatches || []).filter(m => m.completed && !m.forfeit).length;
+  const totalPend = (st.boxMatches || []).filter(m => !m.completed).length;
 
   // Overdue match detection
   const daysInRound = st.cycleStart ? dd(nw(), st.cycleStart) : 0;
-  const daysLeft = st.cycleStart && st.cycleDurationWeeks ? ((st.cycleDurationWeeks || 4) * 7) - daysInRound : 999;
-  const pendingMatches = [...(st.boxMatches || []), ...(st.wildCards || [])].filter(m => !m.completed);
+  const daysLeft = st.cycleStart && st.cycleDurationWeeks ? ((st.cycleDurationWeeks || 2) * 7) - daysInRound : 999;
+  const pendingMatches = (st.boxMatches || []).filter(m => !m.completed);
   const overdueCount = pendingMatches.length;
   const urgency = daysLeft <= 3 ? "urgent" : daysLeft <= 7 ? "warning" : "normal";
 
@@ -617,8 +539,8 @@ function Home({ st, ladder, gn, ini, cd, onJoin }) {
     const hotStreak = activeLad.reduce((b, s) => s.streak > b.streak ? s : b);
     const so = {};
     const cso = (ms) => (ms || []).forEach(m => { if (m.completed && !m.forfeit) { if (m.score1 === 2 && m.score2 === 0) so[m.player1] = (so[m.player1] || 0) + 1; if (m.score2 === 2 && m.score1 === 0) so[m.player2] = (so[m.player2] || 0) + 1; }});
-    cso(st.boxMatches); cso(st.wildCards); cso(st.openChallenges);
-    (st.pastCycles || []).forEach(c => { cso(c.boxMatches); cso(c.wildCards); cso(c.openChallenges); });
+    cso(st.boxMatches);
+    (st.pastCycles || []).forEach(c => { cso(c.boxMatches); });
     const soE = Object.entries(so); const soK = soE.length ? soE.reduce((b, e) => e[1] > b[1] ? e : b) : null;
     const ironMan = activeLad.reduce((b, s) => s.mp > b.mp ? s : b);
     const imp = eloQ.length ? eloQ.reduce((b, e) => (e[1] - 1000) > (b[1] - 1000) ? e : b) : null;
@@ -652,6 +574,17 @@ function Home({ st, ladder, gn, ini, cd, onJoin }) {
           <span style={{ fontSize: 14 }}>📢</span>
           <span style={{ fontSize: 12, color: P.white, flex: 1 }}>{st.announcement.text}</span>
           <span style={{ fontSize: 9, color: P.dim }}>{fmtDate(st.announcement.createdAt)}</span>
+        </div>
+      )}
+
+      {/* Season info banner */}
+      {st.seasonName && (st.seasonStart || st.seasonEnd) && (
+        <div style={{ ...gc, padding: "10px 14px", marginBottom: 8, borderLeft: "3px solid " + P.wc, display: "flex", alignItems: "center", gap: 10 }}>
+          <span style={{ fontSize: 14 }}>🏆</span>
+          <div style={{ flex: 1 }}>
+            <p style={{ fontSize: 12, color: P.white, fontWeight: 700 }}>{st.seasonName}</p>
+            {st.seasonStart && st.seasonEnd && <p style={{ fontSize: 10, color: P.dim }}>{fmtDate(st.seasonStart)} → {fmtDate(st.seasonEnd)}</p>}
+          </div>
         </div>
       )}
 
@@ -743,18 +676,16 @@ function Home({ st, ladder, gn, ini, cd, onJoin }) {
           </div>
           <div style={gt}>
             <div style={{ display: "flex", padding: "9px 10px", background: "rgba(0,48,82,.5)", gap: 4 }}>
-              {[["#", 22], ["Player", 0], ["Tot", 28], ["Box", 28], ["Opn", 28], ["W", 22], ["L", 22]].map(([l, w]) => <span key={l + w} style={{ ...ths, width: w || undefined, flex: w ? undefined : 1 }}>{l}</span>)}
+              {[["#", 22], ["Player", 0], ["Pts", 32], ["W", 26], ["L", 26]].map(([l, w]) => <span key={l + w} style={{ ...ths, width: w || undefined, flex: w ? undefined : 1 }}>{l}</span>)}
             </div>
             {displayLad.map((s, i) => (
               <div key={s.id}>
                 <div onClick={() => setExp(exp === s.id ? null : s.id)} style={{ display: "flex", padding: "9px 10px", gap: 4, borderBottom: exp === s.id ? "none" : "1px solid rgba(21,152,203,.08)", background: i === 0 ? "rgba(241,138,0,.12)" : i % 2 === 0 ? "rgba(0,48,79,.2)" : "transparent", borderLeft: i === 0 ? "3px solid " + P.orange : "3px solid transparent", cursor: "pointer" }}>
                   <span style={{ width: 22, fontWeight: 700, fontSize: 12, color: i === 0 ? P.orange : i < 3 ? P.blue : P.dim }}>{i === 0 ? "\ud83d\udc51" : i + 1}{i > 0 && displayLad[i-1] && displayLad[i-1].points === s.points && <span onClick={(e) => { e.stopPropagation(); setTieExplain(tieExplain === s.id ? null : s.id); }} style={{ fontSize: 8, color: P.dim, cursor: "pointer", marginLeft: 1 }}>=</span>}</span>
                   <span style={{ flex: 1, fontWeight: i < 3 ? 600 : 400, fontSize: 12 }}><span onClick={(e) => { e.stopPropagation(); setProfileId(s.id); }} style={{ cursor: "pointer", borderBottom: "1px dashed " + P.dim }}>{s.name}</span><StreakBadge streak={s.streak} /></span>
-                  <span style={{ width: 28, fontWeight: 700, color: P.orange, fontSize: 12 }}>{s.points}</span>
-                  <span style={{ width: 28, color: P.amber, fontSize: 11 }}>{s.boxPts}</span>
-                  <span style={{ width: 28, color: P.blue, fontSize: 11 }}>{s.openPts}</span>
-                  <span style={{ width: 22, color: P.ok, fontSize: 11 }}>{s.wins}</span>
-                  <span style={{ width: 22, color: P.bad, fontSize: 11 }}>{s.losses}</span>
+                  <span style={{ width: 32, fontWeight: 700, color: P.orange, fontSize: 12 }}>{s.points}</span>
+                  <span style={{ width: 26, color: P.ok, fontSize: 11 }}>{s.wins}</span>
+                  <span style={{ width: 26, color: P.bad, fontSize: 11 }}>{s.losses}</span>
                 </div>
                 {tieExplain === s.id && i > 0 && displayLad[i-1] && (() => { const reason = explainTie(s, displayLad[i-1]); return reason ? <div style={{ padding: "4px 10px 6px 30px", background: "rgba(21,152,203,.06)", fontSize: 10, color: P.blue, animation: "fadeIn .15s" }}>Ranked #{i+1} because: {reason}</div> : null; })()}
                 {exp === s.id && (() => {
@@ -770,7 +701,8 @@ function Home({ st, ladder, gn, ini, cd, onJoin }) {
                         <span style={{ fontSize: 11, color: P.grey }}>Games: <span style={{ color: P.off }}>{s.rw}-{s.rl}</span></span>
                         <span style={{ fontSize: 11, color: P.grey }}>Played: <span style={{ color: P.off }}>{s.mp}</span></span>
                         <span style={{ fontSize: 11, color: P.grey }}>Last: <span style={{ color: P.off }}>{s.last ? new Date(s.last).toLocaleDateString() : "N/A"}</span></span>
-                        {s.inactive && <span style={{ fontSize: 11, color: P.bad }}>Inactive</span>}
+                        {s.noPlay && <span style={{ fontSize: 11, color: P.bad, fontWeight: 700 }}>NO-PLAY (14-day rule)</span>}
+                        {s.inactive && !s.noPlay && <span style={{ fontSize: 11, color: P.bad }}>Inactive</span>}
                       </div>
                       {(eloData.played[s.id] || 0) >= ELO_MIN ? (
                         <div style={{ marginBottom: 8 }}>
@@ -792,7 +724,7 @@ function Home({ st, ladder, gn, ini, cd, onJoin }) {
                                 <span style={{ fontSize: 10, fontWeight: 700, color: h.forfeit ? P.dim : h.won ? P.ok : P.bad, width: 14, flexShrink: 0 }}>{h.forfeit ? "FF" : h.won ? "W" : "L"}</span>
                                 <span style={{ fontSize: 11, color: P.off, width: 30, flexShrink: 0 }}>{h.forfeit ? "—" : h.myScore + "-" + h.oppScore}</span>
                                 <span style={{ fontSize: 11, color: P.white, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>vs {h.oppName}</span>
-                                <span style={{ fontSize: 9, fontWeight: 700, color: h.typeLabel === "Open" ? P.blue : h.typeLabel === "Wild Card" ? P.amber : P.orange, flexShrink: 0 }}>{h.typeLabel}</span>
+                                <span style={{ fontSize: 9, fontWeight: 700, color: P.orange, flexShrink: 0 }}>{h.typeLabel}</span>
                                 {eloDlt !== null && !h.forfeit && <span style={{ fontSize: 9, fontWeight: 700, color: eloDlt > 0 ? P.ok : P.bad, flexShrink: 0, minWidth: 28, textAlign: "right" }}>{eloDlt > 0 ? "+" : ""}{eloDlt}</span>}
                                 <span style={{ fontSize: 9, color: P.dim, flexShrink: 0 }}>{h.completedAt ? fmtDate(h.completedAt) : ""}</span>
                               </div>
@@ -807,7 +739,7 @@ function Home({ st, ladder, gn, ini, cd, onJoin }) {
             ))}
           </div>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 10 }}>
-            {[[P.orange, "Total"], [P.amber, "Box"], [P.blue, "Open"], ["", "\ud83d\udd25 Streak"]].map(([c, t]) => <span key={t} style={{ fontSize: 9, color: P.grey, display: "flex", alignItems: "center", gap: 3 }}>{c && <span style={{ width: 6, height: 6, borderRadius: "50%", background: c }} />}{t}</span>)}
+            {[[P.orange, "Points"], ["", "\ud83d\udd25 Streak"]].map(([c, t]) => <span key={t} style={{ fontSize: 9, color: P.grey, display: "flex", alignItems: "center", gap: 3 }}>{c && <span style={{ width: 6, height: 6, borderRadius: "50%", background: c }} />}{t}</span>)}
           </div>
         </div>
       )}
@@ -828,7 +760,6 @@ function Home({ st, ladder, gn, ini, cd, onJoin }) {
         </div>
       )}
 
-      {last5.length > 0 && <div style={{ marginTop: 12 }}><Sub>RECENT OPEN CHALLENGES</Sub><div style={{ ...gc, padding: 0, overflow: "hidden" }}>{last5.map(m => (<div key={m.id} style={{ display: "flex", alignItems: "center", padding: "8px 12px", borderBottom: "1px solid rgba(21,152,203,.06)" }}><span style={{ flex: 1, fontSize: 12, fontWeight: m.score1 > m.score2 ? 700 : 400, textAlign: "right", paddingRight: 8, color: m.score1 > m.score2 ? P.ok : P.off }}>{gn(m.player1)}</span><span style={{ fontSize: 13, fontWeight: 700, color: P.blue, width: 44, textAlign: "center" }}>{m.score1}-{m.score2}</span><span style={{ flex: 1, fontSize: 12, fontWeight: m.score2 > m.score1 ? 700 : 400, paddingLeft: 8, color: m.score2 > m.score1 ? P.ok : P.off }}>{gn(m.player2)}</span></div>))}</div></div>}
 
       <div style={{ textAlign: "center", padding: "20px 0 10px" }}>
         <button onClick={onJoin} style={{ padding: "14px 36px", background: "linear-gradient(135deg," + P.orange + "," + P.amber + ")", border: "none", borderRadius: 14, color: P.navy, fontSize: 15, fontWeight: 700, cursor: "pointer", boxShadow: "0 4px 20px rgba(241,138,0,.3)", marginBottom: 16 }}>
@@ -899,29 +830,6 @@ function BoxesV({ st, gn, ini, logR, ffM }) {
             </div>}
             {!isCol && done && <div style={{ display: "flex", gap: 12, marginTop: 6 }}><span style={{ fontSize: 10, color: P.orange }}>{"\ud83e\udd47"} {gn(bs[0] ? bs[0].id : "")} (+3)</span>{bs[1] && <span style={{ fontSize: 10, color: P.grey }}>{"\ud83e\udd48"} {gn(bs[1].id)} (+1)</span>}</div>}
           </div>); })}
-      {st.wildCards && st.wildCards.length > 0 && (
-        <div>
-          <div onClick={() => togCol("wc")} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, cursor: "pointer", userSelect: "none" }}>
-            <Sub style={{ margin: 0 }}>Wild Card Matches</Sub>
-            <span style={{ marginLeft: "auto", fontSize: 10, color: P.dim }}>{col["wc"] ? "▶" : "▼"}</span>
-          </div>
-          {!col["wc"] && <div style={{ ...gc, padding: 0, overflow: "hidden" }}>
-            {st.wildCards.map(m => {
-              const activeWC = activeMatchId === m.id;
-              return (
-                <div key={m.id}>
-                  <div style={{ display: "flex", alignItems: "center", padding: "9px 12px", borderBottom: "1px solid rgba(21,152,203,.06)" }}>
-                    <span style={{ flex: 1, fontSize: 13, fontWeight: 600, textAlign: "right", paddingRight: 8 }}>{gn(m.player1)}</span>
-                    {m.completed ? <span style={{ fontSize: 15, fontWeight: 700, color: P.orange, width: 50, textAlign: "center" }}>{m.score1}-{m.score2}</span> : <span onClick={() => openEntry(m.id)} style={{ fontSize: 9, color: activeWC ? P.orange : P.dim, width: 50, textAlign: "center", animation: "pulse 2s infinite", cursor: "pointer", fontWeight: activeWC ? 700 : 400 }}>LOG</span>}
-                    <span style={{ flex: 1, fontSize: 13, fontWeight: 600, paddingLeft: 8 }}>{gn(m.player2)}</span>
-                  </div>
-                  {activeWC && <div style={{ padding: "0 8px 8px" }}><ScoreEntry m={m} list="wildCards" /></div>}
-                </div>
-              );
-            })}
-          </div>}
-        </div>
-      )}
     </div>
   );
 }
@@ -979,15 +887,11 @@ function MatchesV({ st, gn, logR, ffM }) {
     </div>
   );
   const bP = (st.boxMatches || []).filter(m => !m.completed), bD = (st.boxMatches || []).filter(m => m.completed);
-  const wP = (st.wildCards || []).filter(m => !m.completed), wD = (st.wildCards || []).filter(m => m.completed);
-  const oP = (st.openChallenges || []).filter(m => !m.completed), oD = (st.openChallenges || []).filter(m => m.completed);
-  const allM = [...bP, ...bD, ...wP, ...wD, ...oP, ...oD];
+  const allM = [...bP, ...bD];
   const allMPIds = [...new Set(allM.flatMap(m => [m.player1, m.player2]))];
   const allMPlayers = allMPIds.map(id => ({ id, name: gn(id) })).sort((a, b) => a.name.localeCompare(b.name));
   const showM = (m) => !filterPlayer || m.player1 === filterPlayer || m.player2 === filterPlayer;
   const fbP = bP.filter(showM), fbD = bD.filter(showM);
-  const fwP = wP.filter(showM), fwD = wD.filter(showM);
-  const foP = oP.filter(showM), foD = oD.filter(showM);
   return (<div style={{ paddingTop: 16 }}><Tt>Round {st.cycleNumber} Matches</Tt>
     {allMPlayers.length > 0 && (
       <select value={filterPlayer || ""} onChange={e => setFilterPlayer(e.target.value || null)} style={{ width: "100%", background: "rgba(0,20,40,.6)", border: "1px solid rgba(21,152,203,.3)", borderRadius: 10, color: filterPlayer ? P.off : P.dim, fontSize: 13, padding: "10px 14px", marginBottom: 12, appearance: "none", WebkitAppearance: "none", cursor: "pointer" }}>
@@ -995,27 +899,8 @@ function MatchesV({ st, gn, logR, ffM }) {
         {allMPlayers.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
       </select>
     )}
-    {fbP.length > 0 && <div><SecHdr k="bp" label={"Box — Pending (" + fbP.length + ")"} />{!col["bp"] && fbP.map(m => rm(m, "boxMatches", "BOX", P.orange))}</div>}
-    {fwP.length > 0 && <div><SecHdr k="wp" label={"Wild Cards — Pending (" + fwP.length + ")"} />{!col["wp"] && fwP.map(m => rm(m, "wildCards", "WILD CARD", P.wc))}</div>}
-    {foP.length > 0 && <div><SecHdr k="op" label={"Open — Pending (" + foP.length + ")"} />{!col["op"] && foP.map(m => rm(m, "openChallenges", "OPEN", P.blue))}</div>}
-    {(fbD.length + fwD.length + foD.length > 0) && <div><SecHdr k="done" label={"Completed (" + (fbD.length + fwD.length + foD.length) + ")"} />{!col["done"] && <div>{fbD.map(m => rm(m, "boxMatches", "BOX", P.orange))}{fwD.map(m => rm(m, "wildCards", "WILD CARD", P.wc))}{foD.map(m => rm(m, "openChallenges", "OPEN", P.blue))}</div>}</div>}
-  </div>);
-}
-
-// ─── CHALLENGE ───────────────────────────────────────────────
-function ChallengeV({ players, newOC }) {
-  const [p1, setP1] = useState(""); const [p2, setP2] = useState("");
-  if (players.length < 2) return <div style={{ textAlign: "center", padding: 40 }}><p style={{ color: P.grey }}>Need 2+ players.</p></div>;
-  return (<div style={{ paddingTop: 16 }}><Tt>Open Challenge</Tt>
-    <p style={{ fontSize: 12, color: P.grey, marginBottom: 16 }}>Win=2pts. Lose=0. No cap on games played.</p>
-    <div style={gc}>
-      <label style={{ fontSize: 9, fontWeight: 700, color: P.orange, letterSpacing: 2, display: "block", marginBottom: 3 }}>CHALLENGER</label>
-      <select value={p1} onChange={e => setP1(e.target.value)} style={ssS}><option value="">Select...</option>{players.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select>
-      <div style={{ textAlign: "center", fontSize: 22, margin: "8px 0", opacity: .5 }}>{"\u2694\ufe0f"}</div>
-      <label style={{ fontSize: 9, fontWeight: 700, color: P.orange, letterSpacing: 2, display: "block", marginBottom: 3 }}>OPPONENT</label>
-      <select value={p2} onChange={e => setP2(e.target.value)} style={ssS}><option value="">Select...</option>{players.filter(p => p.id !== p1).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select>
-      <button onClick={() => { if (p1 && p2) { newOC(p1, p2); setP1(""); setP2(""); } }} disabled={!p1 || !p2} style={{ ...bpS, marginTop: 12, opacity: (!p1 || !p2) ? .35 : 1 }}>Create Challenge</button>
-    </div>
+    {fbP.length > 0 && <div><SecHdr k="bp" label={"Matches — Pending (" + fbP.length + ")"} />{!col["bp"] && fbP.map(m => rm(m, "boxMatches", "MATCH", P.orange))}</div>}
+    {fbD.length > 0 && <div><SecHdr k="done" label={"Completed (" + fbD.length + ")"} />{!col["done"] && <div>{fbD.map(m => rm(m, "boxMatches", "MATCH", P.orange))}</div>}</div>}
   </div>);
 }
 
@@ -1040,8 +925,8 @@ function CheckInV({ st, ladder, togCI, selLast, autoOpen, onAutoOpenDone }) {
   // Sign Up for Next Round
   const playing = ladder.filter(s => st.checkedIn.includes(s.id));
   const notPlaying = ladder.filter(s => !st.checkedIn.includes(s.id));
-  const boxWcIds = new Set([...(st.boxMatches || []), ...(st.wildCards || [])].filter(m => m.completed && !m.forfeit).flatMap(m => [m.player1, m.player2]));
-  const allCurrentIds = new Set([...(st.boxMatches || []), ...(st.wildCards || []), ...(st.openChallenges || [])].filter(m => m.completed && !m.forfeit).flatMap(m => [m.player1, m.player2]));
+  const boxWcIds = new Set((st.boxMatches || []).filter(m => m.completed && !m.forfeit).flatMap(m => [m.player1, m.player2]));
+  const allCurrentIds = new Set((st.boxMatches || []).filter(m => m.completed && !m.forfeit).flatMap(m => [m.player1, m.player2]));
   const returning = playing.filter(s => boxWcIds.has(s.id));
   const newPlayers = playing.filter(s => !boxWcIds.has(s.id) && !allCurrentIds.has(s.id));
   const other = playing.filter(s => allCurrentIds.has(s.id) && !boxWcIds.has(s.id));
@@ -1178,6 +1063,7 @@ function RulesV() {
             <Row title="Box Structure" body="Players are grouped into boxes of up to 4. Full round-robin within each box — 3 matches per round. New/returning players start in the Swing Box." />
             <Row title="Promotion & Relegation" body="Boxes are re-seeded each round based on ladder rank — the top-ranked players form Box 1, working down to the Swing Box. Win matches and earn points to climb the standings and earn a spot in a higher box next round. New players start in the Swing Box." />
             <Row title="Wild Cards" body="Each player gets 1 wild card cross-box match per round, randomly assigned." />
+            <Row title="Open Challenges" body="Open Challenges are unlimited — challenge anyone in the office for 2 bonus points. No penalty for a loss." />
             <Row title="Inactivity" body="No match in 42 days → marked inactive and dropped to the bottom of the standings." last />
           </Section>
           <Section title="DRA House Bar Rules" color={P.blue}>
@@ -1194,7 +1080,7 @@ function RulesV() {
       {tab === "scoring" && (
         <div>
           <Section title="Match Points">
-            <p style={{ fontSize: 11, color: P.dim, marginBottom: 12 }}>Applies to box matches and wild card matches. Best of 3 games (race to 2).</p>
+            <p style={{ fontSize: 11, color: P.dim, marginBottom: 12 }}>All round-robin matches are best of 3 games (race to 2).</p>
             <div style={{ borderRadius: 12, overflow: "hidden", border: "1px solid rgba(255,255,255,.1)" }}>
               {[
                 ["Win 2–0", "Shutout — opponent scores 0 games", "5 pts", P.orange],
@@ -1230,6 +1116,22 @@ function RulesV() {
               ))}
             </div>
           </Section>
+          <Section title="Open Challenges">
+            <div style={{ borderRadius: 12, overflow: "hidden", border: "1px solid rgba(255,255,255,.1)" }}>
+              {[
+                ["Win", "Defeat any opponent in an open challenge", "+2 pts", P.blue],
+                ["Loss", "Open challenge loss — no penalty", "0 pts", P.dim],
+              ].map(([result, desc, pts, color], i) => (
+                <div key={result} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", background: i % 2 === 0 ? "rgba(0,48,82,.4)" : "transparent", borderBottom: i < 1 ? "1px solid rgba(255,255,255,.05)" : "none" }}>
+                  <div style={{ flex: 1 }}>
+                    <p style={{ fontSize: 13, fontWeight: 700, color: P.off, marginBottom: 2 }}>{result}</p>
+                    <p style={{ fontSize: 10, color: P.dim }}>{desc}</p>
+                  </div>
+                  <span style={{ fontSize: 20, fontWeight: 700, color, minWidth: 48, textAlign: "right" }}>{pts}</span>
+                </div>
+              ))}
+            </div>
+          </Section>
           <div style={{ ...gc, background: "rgba(21,152,203,.06)", border: "1px solid rgba(21,152,203,.2)" }}>
             <h4 style={{ fontSize: 13, fontWeight: 700, color: P.blue, marginBottom: 10 }}>Best Possible Round</h4>
             <p style={{ fontSize: 12, color: P.grey, lineHeight: 1.8 }}>
@@ -1237,6 +1139,7 @@ function RulesV() {
               Box winner bonus → <span style={{ color: P.orange, fontWeight: 700 }}>+3 pts</span><br />
               Wild card shutout win → <span style={{ color: P.orange, fontWeight: 700 }}>+5 pts</span><br />
               <span style={{ color: P.off, fontWeight: 700, fontSize: 13 }}>Box/WC total: 23 pts</span><br />
+              <span style={{ color: P.blue, fontSize: 11 }}>+ Open challenges: +2 pts each (unlimited)</span>
             </p>
           </div>
         </div>
@@ -1256,11 +1159,9 @@ function PastCycleRow({ c, gn, cycleIdx, saveCycle }) {
   const [eS2, setES2] = useState(0);
 
   const realBM = (c.boxMatches || []).filter(m => m.completed && !m.forfeit);
-  const realWC = (c.wildCards || []).filter(m => m.completed && !m.forfeit);
-  const realOC = (c.openChallenges || []).filter(m => m.completed && !m.forfeit);
-  const unplayed = (c.boxMatches || []).filter(m => m.forfeit).length + (c.wildCards || []).filter(m => m.forfeit).length;
-  const totalMatches = (c.boxMatches || []).length + (c.wildCards || []).length;
-  const totalReal = realBM.length + realWC.length + realOC.length;
+  const unplayed = (c.boxMatches || []).filter(m => m.forfeit).length;
+  const totalMatches = (c.boxMatches || []).length;
+  const totalReal = realBM.length;
   const pct = totalMatches > 0 ? Math.round((totalReal / totalMatches) * 100) : 100;
 
   // Champions per box
@@ -1273,27 +1174,20 @@ function PastCycleRow({ c, gn, cycleIdx, saveCycle }) {
   // Per-player cycle totals for Players tab
   const pTotals = {};
   const ensureP = id => { if (!pTotals[id]) pTotals[id] = { id, matchPts: 0, bonusPts: 0 }; };
-  [...realBM, ...realWC].forEach(m => {
+  realBM.forEach(m => {
     ensureP(m.player1); ensureP(m.player2);
     if (m.score1 > m.score2) { pTotals[m.player1].matchPts += m.score2 === 0 ? 5 : 4; if (m.score2 > 0) pTotals[m.player2].matchPts += 2; }
     else { pTotals[m.player2].matchPts += m.score1 === 0 ? 5 : 4; if (m.score1 > 0) pTotals[m.player1].matchPts += 2; }
   });
-  realOC.forEach(m => {
-    ensureP(m.player1); ensureP(m.player2);
-    if (m.score1 > m.score2) pTotals[m.player1].matchPts += 2; else pTotals[m.player2].matchPts += 2;
-  });
   (c.bonuses || []).forEach(b => { ensureP(b.id); pTotals[b.id].bonusPts += b.pts; });
   const playerList = Object.values(pTotals).map(p => ({ ...p, total: p.matchPts + p.bonusPts })).sort((a, b) => b.total - a.total);
 
-  const allMatches = [
-    ...realBM.map(m => ({ ...m, _type: "Box", _label: m.boxName || "Box" })),
-    ...realWC.map(m => ({ ...m, _type: "WC", _label: "Wild Card" })),
-    ...realOC.map(m => ({ ...m, _type: "Open", _label: "Open" })),
-  ].sort((a, b) => (a.completedAt || "").localeCompare(b.completedAt || ""));
+  const allMatches = realBM.map(m => ({ ...m, _type: "Box", _label: m.boxName || "Group" }))
+    .sort((a, b) => (a.completedAt || "").localeCompare(b.completedAt || ""));
 
   const saveMatchEdit = (matchId, s1, s2) => {
     const upd = list => list.map(m => m.id === matchId ? { ...m, score1: s1, score2: s2, forfeit: false } : m);
-    saveCycle(cycleIdx, { ...c, boxMatches: upd(c.boxMatches || []), wildCards: upd(c.wildCards || []), openChallenges: upd(c.openChallenges || []) });
+    saveCycle(cycleIdx, { ...c, boxMatches: upd(c.boxMatches || []) });
     setEditingId(null);
   };
 
@@ -1369,30 +1263,6 @@ function PastCycleRow({ c, gn, cycleIdx, saveCycle }) {
                   </div>
                 );
               })}
-              {realWC.length > 0 && (
-                <div style={{ marginBottom: 10 }}>
-                  <p style={{ fontSize: 9, color: P.wc, fontWeight: 700, letterSpacing: 2, marginBottom: 6 }}>WILD CARDS</p>
-                  {realWC.map(m => (
-                    <div key={m.id} style={{ display: "flex", alignItems: "center", padding: "4px 0", borderBottom: "1px solid rgba(21,152,203,.04)", fontSize: 12, gap: 6 }}>
-                      <span style={{ flex: 1, textAlign: "right", fontWeight: m.score1 > m.score2 ? 700 : 400 }}>{gn(m.player1)}</span>
-                      <span style={{ color: P.wc, fontWeight: 700, width: 40, textAlign: "center" }}>{m.score1}–{m.score2}</span>
-                      <span style={{ flex: 1, fontWeight: m.score2 > m.score1 ? 700 : 400 }}>{gn(m.player2)}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
-              {realOC.length > 0 && (
-                <div style={{ marginBottom: 10 }}>
-                  <p style={{ fontSize: 9, color: P.blue, fontWeight: 700, letterSpacing: 2, marginBottom: 6 }}>OPEN CHALLENGES</p>
-                  {realOC.map(m => (
-                    <div key={m.id} style={{ display: "flex", alignItems: "center", padding: "4px 0", borderBottom: "1px solid rgba(21,152,203,.04)", fontSize: 12, gap: 6 }}>
-                      <span style={{ flex: 1, textAlign: "right", fontWeight: m.score1 > m.score2 ? 700 : 400 }}>{gn(m.player1)}</span>
-                      <span style={{ color: P.blue, fontWeight: 700, width: 40, textAlign: "center" }}>{m.score1}–{m.score2}</span>
-                      <span style={{ flex: 1, fontWeight: m.score2 > m.score1 ? 700 : 400 }}>{gn(m.player2)}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
               {(c.bonuses || []).filter(b => b.pts > 0).length > 0 && (
                 <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid rgba(21,152,203,.1)" }}>
                   <p style={{ fontSize: 9, color: P.amber, fontWeight: 700, letterSpacing: 2, marginBottom: 6 }}>BONUSES AWARDED</p>
@@ -1499,7 +1369,7 @@ function PastCycleRow({ c, gn, cycleIdx, saveCycle }) {
 
 function AdminV({ st, ladder, previewCyc, confirmCyc, completeCyc, endEarlyCyc, undoCyc, resetAll, addP, rmP, ffM, gn, save, togCI }) {
   const [pin, setPin] = useState(""); const [ok, setOk] = useState(false); const [err, setErr] = useState(false);
-  const [cc, setCc] = useState(false); const [cr, setCr] = useState(false); const [cu, setCu] = useState(false); const [randomRound, setRandomRound] = useState(false);
+  const [cc, setCc] = useState(false); const [cr, setCr] = useState(false); const [cu, setCu] = useState(false);
   const [nm, setNm] = useState(""); const [rmId, setRmId] = useState(null); const [search, setSearch] = useState("");
   const [showPlayers, setShowPlayers] = useState(true);
   const [showCheckedIn, setShowCheckedIn] = useState(false);
@@ -1514,14 +1384,12 @@ function AdminV({ st, ladder, previewCyc, confirmCyc, completeCyc, endEarlyCyc, 
   const [playerReasons, setPlayerReasons] = useState({});
   const [previewElo, setPreviewElo] = useState({ ratings: {}, played: {}, frac: {} });
   const daysInCycle = st.cycleStart ? dd(nw(), st.cycleStart) : 0;
-  const pendingMatches = [
-    ...(st.boxMatches || []).filter(m => !m.completed).map(m => ({ ...m, matchType: "Box", label: m.boxName || "Box" })),
-    ...(st.wildCards || []).filter(m => !m.completed).map(m => ({ ...m, matchType: "Wild Card", label: "Wild Card" })),
-  ];
+  const pendingMatches = (st.boxMatches || []).filter(m => !m.completed)
+    .map(m => ({ ...m, matchType: "Box", label: m.boxName || "Group" }));
   const chk = () => { if (pin === (st.adminPin || "5755")) { setOk(true); setErr(false); } else { setErr(true); setPin(""); } };
-  const pend = ((st.boxMatches || []).filter(m => !m.completed).length) + ((st.wildCards || []).filter(m => !m.completed).length);
+  const pend = (st.boxMatches || []).filter(m => !m.completed).length;
   const isRealMatch = m => m.completed && !m.forfeit && !(m.score1 === 0 && m.score2 === 0);
-  const tot = [...(st.boxMatches || []), ...(st.wildCards || []), ...(st.openChallenges || [])].filter(isRealMatch).length + (st.pastCycles || []).reduce((a, c) => [...(c.boxMatches || []), ...(c.wildCards || []), ...(c.openChallenges || [])].filter(isRealMatch).length + a, 0);
+  const tot = (st.boxMatches || []).filter(isRealMatch).length + (st.pastCycles || []).reduce((a, c) => (c.boxMatches || []).filter(isRealMatch).length + a, 0);
   const filtLad = search.trim() ? ladder.filter(s => s.name.toLowerCase().includes(search.toLowerCase())) : ladder;
 
   if (!ok) return (<div style={{ paddingTop: 16 }}><Tt>Admin</Tt>
@@ -1629,14 +1497,35 @@ function AdminV({ st, ladder, previewCyc, confirmCyc, completeCyc, endEarlyCyc, 
 
     <div style={gc}><h4 style={{ fontSize: 15, fontWeight: 600, color: P.white, marginBottom: 6, fontFamily: "Georgia,serif" }}>Round Duration</h4>
       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-        <input type="number" min="1" max="12" value={st.cycleDurationWeeks || 4} onChange={e => save({ ...st, cycleDurationWeeks: Math.max(1, Math.min(12, +e.target.value || 1)) })} style={{ ...ssS, width: 70, marginBottom: 0, textAlign: "center" }} />
+        <input type="number" min="1" max="12" value={st.cycleDurationWeeks || 2} onChange={e => save({ ...st, cycleDurationWeeks: Math.max(1, Math.min(12, +e.target.value || 1)) })} style={{ ...ssS, width: 70, marginBottom: 0, textAlign: "center" }} />
         <span style={{ fontSize: 12, color: P.grey }}>weeks per round</span>
       </div>
     </div>
 
+    <div style={gc}><h4 style={{ fontSize: 15, fontWeight: 600, color: P.white, marginBottom: 6, fontFamily: "Georgia,serif" }}>Season Configuration</h4>
+      <p style={{ fontSize: 11, color: P.grey, marginBottom: 10 }}>Define your league's summer season window. Display only — does not auto-start or auto-stop rounds.</p>
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <label style={{ fontSize: 11, color: P.grey, width: 80, flexShrink: 0 }}>Season name</label>
+          <input type="text" value={st.seasonName || ""} placeholder="e.g. Summer 2026" onChange={e => save({ ...st, seasonName: e.target.value })} style={{ ...inpS, flex: 1 }} />
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <label style={{ fontSize: 11, color: P.grey, width: 80, flexShrink: 0 }}>Start date</label>
+          <input type="date" value={st.seasonStart ? st.seasonStart.slice(0, 10) : ""} onChange={e => save({ ...st, seasonStart: e.target.value ? new Date(e.target.value).toISOString() : null })} style={{ ...inpS, flex: 1 }} />
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <label style={{ fontSize: 11, color: P.grey, width: 80, flexShrink: 0 }}>End date</label>
+          <input type="date" value={st.seasonEnd ? st.seasonEnd.slice(0, 10) : ""} onChange={e => save({ ...st, seasonEnd: e.target.value ? new Date(e.target.value).toISOString() : null })} style={{ ...inpS, flex: 1 }} />
+        </div>
+      </div>
+      {st.seasonStart && st.seasonEnd && (
+        <p style={{ fontSize: 10, color: P.dim, marginTop: 8 }}>Season runs {fmtDate(st.seasonStart)} → {fmtDate(st.seasonEnd)} ({Math.round(dd(st.seasonEnd, st.seasonStart))} days)</p>
+      )}
+    </div>
+
     {(() => {
       const roundActive = st.cycleNumber > 0 && (st.boxes||[]).length > 0;
-      const allDone = roundActive && (st.boxMatches||[]).every(m => m.completed) && (st.wildCards||[]).every(m => m.completed);
+      const allDone = roundActive && (st.boxMatches||[]).every(m => m.completed);
       const cycleComplete = st.cycleNumber > 0 && (st.boxes||[]).length === 0;
       const noRound = !st.cycleNumber || cycleComplete;
       return (
@@ -1653,8 +1542,8 @@ function AdminV({ st, ladder, previewCyc, confirmCyc, completeCyc, endEarlyCyc, 
             else if (N % 4 === 2) suggestion = Math.floor(N / 4) + " box" + (Math.floor(N / 4) !== 1 ? "es" : "") + " of 4 + swing of 6";
             else suggestion = Math.floor(N / 4) + " box" + (Math.floor(N / 4) !== 1 ? "es" : "") + " of 4 + swing of 3";
             const ciElo = calcElo(st.players, st);
-            const bwIds = new Set([...(st.boxMatches || []), ...(st.wildCards || [])].filter(m => m.completed && !m.forfeit).flatMap(m => [m.player1, m.player2]));
-            const acIds = new Set([...(st.boxMatches || []), ...(st.wildCards || []), ...(st.openChallenges || [])].filter(m => m.completed && !m.forfeit).flatMap(m => [m.player1, m.player2]));
+            const bwIds = new Set((st.boxMatches || []).filter(m => m.completed && !m.forfeit).flatMap(m => [m.player1, m.player2]));
+            const acIds = bwIds;
             return (
               <div style={{ marginBottom: 10 }}>
                 <div onClick={() => setShowCheckedIn(v => !v)} style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", marginBottom: 4 }}>
@@ -1712,7 +1601,7 @@ function AdminV({ st, ladder, previewCyc, confirmCyc, completeCyc, endEarlyCyc, 
             if (noRound) {
               if (st.checkedIn.length < 4) return <p style={{ fontSize: 11, color: P.bad }}>Need 4+ signed up to start ({st.checkedIn.length} so far)</p>;
               const openPreview = () => {
-                const data = previewCyc(randomRound);
+                const data = previewCyc();
                 if (!data) return;
                 setPreviewBoxes(data.suggestedBoxes.map(b => ({ ...b, players: [...b.players] })));
                 setSuggestedBoxes(data.suggestedBoxes.map(b => ({ ...b, players: [...b.players] })));
@@ -1723,14 +1612,9 @@ function AdminV({ st, ladder, previewCyc, confirmCyc, completeCyc, endEarlyCyc, 
                 setPreviewElo({ ratings: data.eloRatings || {}, played: data.eloPlayed || {}, frac: data.eloFrac || {} });
                 setShowBoxPreview(true);
                 setCc(false);
-                setRandomRound(false);
               };
               return (
                 <div>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
-                    <input type="checkbox" id="rndRound" checked={randomRound} onChange={e => setRandomRound(e.target.checked)} style={{ width: 16, height: 16, accentColor: P.orange, cursor: "pointer" }} />
-                    <label htmlFor="rndRound" style={{ fontSize: 12, color: P.grey, cursor: "pointer" }}>Randomize boxes <span style={{ color: P.dim, fontSize: 10 }}>(ignore seeding)</span></label>
-                  </div>
                   <button onClick={openPreview} style={{ ...bpS, background: "linear-gradient(135deg," + P.amber + ",#F59E0B)", color: P.navy }}>Preview Boxes for Round {st.cycleNumber + 1}</button>
                 </div>
               );
@@ -1748,39 +1632,25 @@ function AdminV({ st, ladder, previewCyc, confirmCyc, completeCyc, endEarlyCyc, 
     {(st.pastCycles || []).length > 0 && (() => {
       const lastC = st.pastCycles[st.pastCycles.length - 1];
       const rBM = (lastC.boxMatches || []).filter(m => m.completed && !m.forfeit);
-      const rWC = (lastC.wildCards || []).filter(m => m.completed && !m.forfeit);
-      const rOC = (lastC.openChallenges || []).filter(m => m.completed && !m.forfeit);
       const pTot = {};
       const ep = id => { if (!pTot[id]) pTot[id] = { id, pts: 0 }; };
-      [...rBM, ...rWC].forEach(m => { ep(m.player1); ep(m.player2); if (m.score1 > m.score2) { pTot[m.player1].pts += m.score2 === 0 ? 5 : 4; if (m.score2 > 0) pTot[m.player2].pts += 2; } else { pTot[m.player2].pts += m.score1 === 0 ? 5 : 4; if (m.score1 > 0) pTot[m.player1].pts += 2; } });
-      rOC.forEach(m => { ep(m.player1); ep(m.player2); if (m.score1 > m.score2) pTot[m.player1].pts += 2; else pTot[m.player2].pts += 2; });
+      rBM.forEach(m => { ep(m.player1); ep(m.player2); if (m.score1 > m.score2) { pTot[m.player1].pts += m.score2 === 0 ? 5 : 4; if (m.score2 > 0) pTot[m.player2].pts += 2; } else { pTot[m.player2].pts += m.score1 === 0 ? 5 : 4; if (m.score1 > 0) pTot[m.player1].pts += 2; } });
       (lastC.bonuses || []).forEach(b => { ep(b.id); pTot[b.id].pts += b.pts; });
       const sorted = Object.values(pTot).sort((a, b) => b.pts - a.pts);
       const topScorer = sorted[0];
-      const shutouts = [...rBM, ...rWC, ...rOC].filter(m => (m.score1 === 2 && m.score2 === 0) || (m.score2 === 2 && m.score1 === 0)).length;
-      const box1 = (lastC.boxes || []).find(b => !b.isSwing);
-      const box1Idx = box1 ? lastC.boxes.indexOf(box1) : -1;
-      const box1BM = box1Idx >= 0 ? (lastC.boxMatches || []).filter(m => m.box === box1Idx) : [];
-      const champ = box1 ? boxSt(box1.players, box1BM)[0] : null;
-      const totalPlayed = rBM.length + rWC.length + rOC.length;
+      const shutouts = rBM.filter(m => (m.score1 === 2 && m.score2 === 0) || (m.score2 === 2 && m.score1 === 0)).length;
+      const totalPlayed = rBM.length;
       return (
         <div style={{ ...gc, background: "linear-gradient(135deg, rgba(241,138,0,.1), rgba(21,152,203,.06))", borderColor: "rgba(241,138,0,.25)" }}>
           <h4 style={{ fontSize: 15, fontWeight: 600, color: P.orange, fontFamily: "Georgia,serif", marginBottom: 4 }}>Round {lastC.cycle} Summary</h4>
           <p style={{ fontSize: 10, color: P.dim, marginBottom: 10 }}>{fmtDate(lastC.startedAt)}</p>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-            {lastC.randomized ? (
-              <div style={{ flex: "0 0 100%", background: "rgba(0,20,40,.4)", borderRadius: 10, padding: "10px 12px", border: "1px solid rgba(196,161,255,.25)" }}>
-                <p style={{ fontSize: 9, color: P.wc, fontWeight: 700, letterSpacing: 1, marginBottom: 6 }}>🎲 BOX WINNERS</p>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: "4px 14px" }}>
-                  {(lastC.boxes || []).map((box, bi) => { const bm = (lastC.boxMatches || []).filter(m => m.box === bi); const winner = boxSt(box.players, bm)[0]; return winner ? (<div key={bi} style={{ display: "flex", alignItems: "baseline", gap: 5 }}><span style={{ fontSize: 9, color: P.dim, fontWeight: 700 }}>{box.name}:</span><span style={{ fontSize: 12, color: P.white, fontWeight: 600 }}>{gn(winner.id)}</span></div>) : null; })}
-                </div>
+            <div style={{ flex: "0 0 100%", background: "rgba(0,20,40,.4)", borderRadius: 10, padding: "10px 12px", border: "1px solid rgba(196,161,255,.25)" }}>
+              <p style={{ fontSize: 9, color: P.wc, fontWeight: 700, letterSpacing: 1, marginBottom: 6 }}>🎲 GROUP WINNERS</p>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: "4px 14px" }}>
+                {(lastC.boxes || []).map((box, bi) => { const bm = (lastC.boxMatches || []).filter(m => m.box === bi); const winner = boxSt(box.players, bm)[0]; return winner ? (<div key={bi} style={{ display: "flex", alignItems: "baseline", gap: 5 }}><span style={{ fontSize: 9, color: P.dim, fontWeight: 700 }}>{box.name}:</span><span style={{ fontSize: 12, color: P.white, fontWeight: 600 }}>{gn(winner.id)}</span></div>) : null; })}
               </div>
-            ) : (
-              champ && <div style={{ flex: 1, minWidth: 100, background: "rgba(0,20,40,.4)", borderRadius: 10, padding: "10px 12px", border: "1px solid rgba(241,138,0,.2)" }}>
-                <p style={{ fontSize: 9, color: P.orange, fontWeight: 700, letterSpacing: 1, marginBottom: 4 }}>🏆 CHAMPION</p>
-                <p style={{ fontSize: 13, color: P.white, fontWeight: 600 }}>{gn(champ.id)}</p>
-              </div>
-            )}
+            </div>
             {topScorer && <div style={{ flex: 1, minWidth: 100, background: "rgba(0,20,40,.4)", borderRadius: 10, padding: "10px 12px", border: "1px solid rgba(21,152,203,.2)" }}>
               <p style={{ fontSize: 9, color: P.blue, fontWeight: 700, letterSpacing: 1, marginBottom: 4 }}>⭐ TOP SCORER</p>
               <p style={{ fontSize: 13, color: P.white, fontWeight: 600 }}>{gn(topScorer.id)} <span style={{ color: P.orange, fontSize: 11 }}>{topScorer.pts}pts</span></p>
@@ -1813,7 +1683,7 @@ function AdminV({ st, ladder, previewCyc, confirmCyc, completeCyc, endEarlyCyc, 
       const date = new Date().toISOString().slice(0, 10);
       const dl = (content, filename, type) => { const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([content], { type })); a.download = filename; a.click(); URL.revokeObjectURL(a.href); };
       const exportJSON = () => dl(JSON.stringify(st, null, 2), `dra-pool-backup-${date}.json`, "application/json");
-      const exportCSV = () => { const elo = calcElo(st.players, st); const rows = [["Rank","Name","Points","Box Pts","Open Pts","Wins","Losses","Racks Won","Racks Lost","ELO"]]; ladder.forEach((s, i) => rows.push([i+1, s.name, s.points, s.boxPts, s.openPts, s.wins, s.losses, s.rw, s.rl, elo.ratings[s.id] || 1000])); dl(rows.map(r => r.join(",")).join("\n"), `dra-pool-standings-${date}.csv`, "text/csv"); };
+      const exportCSV = () => { const elo = calcElo(st.players, st); const rows = [["Rank","Name","Points","Wins","Losses","Racks Won","Racks Lost","ELO"]]; ladder.forEach((s, i) => rows.push([i+1, s.name, s.points, s.wins, s.losses, s.rw, s.rl, elo.ratings[s.id] || 1000])); dl(rows.map(r => r.join(",")).join("\n"), `dra-pool-standings-${date}.csv`, "text/csv"); };
       return (
         <div style={gc}>
           <h4 style={{ fontSize: 15, fontWeight: 600, color: P.white, fontFamily: "Georgia,serif", marginBottom: 6 }}>Export Data</h4>
@@ -1834,7 +1704,7 @@ function AdminV({ st, ladder, previewCyc, confirmCyc, completeCyc, endEarlyCyc, 
           <div key={m.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 0", borderBottom: "1px solid rgba(21,152,203,.06)" }}>
             <span style={{ fontSize: 9, fontWeight: 700, color: daysInCycle >= 7 ? P.bad : P.amber, width: 52, letterSpacing: 1 }}>{m.label.toUpperCase()}</span>
             <span style={{ flex: 1, fontSize: 12 }}>{gn(m.player1)} <span style={{ color: P.dim }}>vs</span> {gn(m.player2)}</span>
-            <button onClick={() => ffM(m.id, m.matchType === "Box" ? "boxMatches" : "wildCards")} style={{ padding: "4px 10px", background: "transparent", border: "1px solid " + P.dim, borderRadius: 7, color: P.dim, fontSize: 10, fontWeight: 700, cursor: "pointer" }}>Forfeit</button>
+            <button onClick={() => ffM(m.id, "boxMatches")} style={{ padding: "4px 10px", background: "transparent", border: "1px solid " + P.dim, borderRadius: 7, color: P.dim, fontSize: 10, fontWeight: 700, cursor: "pointer" }}>Forfeit</button>
           </div>
         ))}
       </div>
