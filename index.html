@@ -327,15 +327,17 @@ function App() {
       return withLog({ ...cur, pendingPlayers: [...pending, { name, requestedAt: nw() }] }, "JOIN_REQUESTED", name);
     }, "Couldn't submit");
   };
-  // Admin approves a pending player → moves to active, removed from available.
+  // Admin approves a pending player → moves to active, removed from available,
+  // AND auto-checks them in for the next round.
   const approvePlayer = (name) => {
     save(cur => {
       const pending = (cur.pendingPlayers || []).filter(p => p.name !== name);
       const avail = (cur.availablePlayers || []).filter(n => n !== name);
       if ((cur.players || []).some(p => p.name === name)) { flash("Already active"); return null; }
       const np = { id: uid(), name, joinedAt: nw() };
-      flash(name + " approved!");
-      return withLog({ ...cur, players: [...(cur.players || []), np], pendingPlayers: pending, availablePlayers: avail }, "PLAYER_APPROVED", name);
+      const checkedIn = [...new Set([...(cur.checkedIn || []), np.id])];
+      flash(name + " approved & signed up for next round!");
+      return withLog({ ...cur, players: [...(cur.players || []), np], pendingPlayers: pending, availablePlayers: avail, checkedIn }, "PLAYER_APPROVED", name);
     }, "Couldn't approve");
   };
   // Admin rejects → name goes back to available (so they can try again later).
