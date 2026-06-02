@@ -1260,7 +1260,7 @@ function CheckInV({ st, ladder, togCI, selLast, autoOpen, onAutoOpenDone }) {
       </div>
     )}
     <Tt>Players</Tt>
-    <p style={{ fontSize: 12, color: P.grey, marginBottom: 10 }}>{st.checkedIn.length} of {st.players.length} Signed up for next round</p>
+    <p style={{ fontSize: 12, color: P.grey, marginBottom: 10 }}>{st.checkedIn.length} player{st.checkedIn.length !== 1 ? "s" : ""} signed up for next round</p>
 
     {/* Playing This Round — read-only */}
     {st.cycleNumber > 0 && currentPlayers.length > 0 && (<>
@@ -1275,31 +1275,14 @@ function CheckInV({ st, ladder, togCI, selLast, autoOpen, onAutoOpenDone }) {
       </div>
     </>)}
 
-    {/* Sign Up for Next Round */}
-    {secBtn("Sign Up for Next Round", showSignUp, () => setShowSignUp(v => !v), playing.length)}
-    {/* Quick check-in button */}
-    {st.pastCycles.length > 0 && playing.length === 0 && (
-      <button onClick={selLast} style={{ ...bpS, marginBottom: 8 }}>Check in all from last round</button>
-    )}
-    {playing.length > 0 && <p style={{ fontSize: 11, color: P.ok, textAlign: "center", marginBottom: 6, fontWeight: 600 }}>{playing.length} checked in</p>}
+    {/* Signed Up for Next Round */}
+    {secBtn("Signed Up for Next Round", showSignUp, () => setShowSignUp(v => !v), playing.length)}
     {showSignUp && (
       <div style={gc}>
-        {playing.length === 0 && <p style={{ fontSize: 12, color: P.dim, textAlign: "center", padding: "8px 0" }}>No one signed up yet. Use the button above or check in players individually.</p>}
+        {playing.length === 0 && <p style={{ fontSize: 12, color: P.dim, textAlign: "center", padding: "8px 0" }}>No one signed up yet.</p>}
         {returning.map(s => playerRow(s, togCI, "Leave", leaveBtn, "RETURNING"))}
         {newPlayers.map(s => playerRow(s, togCI, "Leave", leaveBtn, "NEW"))}
         {other.map(s => playerRow(s, togCI, "Leave", leaveBtn, null))}
-
-        {/* Remaining — collapsed */}
-        <div ref={signupRef} onClick={() => setShowRemaining(v => !v)} style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 0 6px", cursor: "pointer", userSelect: "none", marginTop: 4, borderTop: "1px solid rgba(21,152,203,.08)" }}>
-          <span style={{ fontSize: 9, color: P.dim }}>{showRemaining ? "\u25bc" : "\u25b6"}</span>
-          <span style={{ fontSize: 10, fontWeight: 700, color: P.dim, letterSpacing: 1 }}>NOT SIGNED UP ({notPlaying.length})</span>
-        </div>
-        {showRemaining && (<>
-          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search..." style={{ ...inpS, width: "100%", marginBottom: 8, flex: "none", fontSize: 12 }} />
-          {filtered.map(s => playerRow(s, id => setConfirmJoinId(id), "Join", joinBtn, false))}
-          {filtered.length === 0 && search && <p style={{ color: P.dim, fontSize: 12, padding: "8px 0", textAlign: "center" }}>No matches for "{search}"</p>}
-          {filtered.length === 0 && !search && <p style={{ fontSize: 12, color: P.dim, textAlign: "center", padding: "8px 0" }}>Everyone is already signed up!</p>}
-        </>)}
       </div>
     )}
   </div>);
