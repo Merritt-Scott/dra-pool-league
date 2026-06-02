@@ -373,8 +373,10 @@ function App() {
       const bon = [];
       if (cur.boxes) cur.boxes.forEach((box, bi) => { const bm = (cur.boxMatches || []).filter(m => m.box === bi); const realBM = bm.filter(m => m.completed && !m.forfeit && !(m.score1 === 0 && m.score2 === 0)); if (realBM.length > 0 && bm.every(m => m.completed)) { const bs = boxSt(box.players, realBM); if (bs[0]) bon.push({ id: bs[0].id, pts: 3 }); if (bs[1]) bon.push({ id: bs[1].id, pts: 1 }); } });
       const past = cur.cycleNumber > 0 ? [...(cur.pastCycles || []), { cycle: cur.cycleNumber, boxMatches: cur.boxMatches || [], wildCards: cur.wildCards || [], openChallenges: cur.openChallenges || [], boxes: cur.boxes || [], bonuses: [...bon], startedAt: cur.cycleStart, randomized: cur.cycleRandomized || false }] : cur.pastCycles;
+      // Default everyone IN for next round — they can leave if they don't want to play.
+      const allActiveIds = (cur.players || []).map(p => p.id);
       flash("Round " + cur.cycleNumber + " complete!");
-      return withLog({ ...cur, pastCycles: past, boxes: [], boxMatches: [], wildCards: [], openChallenges: [] }, "CYCLE_COMPLETED", "Round " + cur.cycleNumber);
+      return withLog({ ...cur, pastCycles: past, boxes: [], boxMatches: [], wildCards: [], openChallenges: [], checkedIn: allActiveIds }, "CYCLE_COMPLETED", "Round " + cur.cycleNumber);
     }, "Couldn't complete round");
   };
   const endEarlyCyc = () => {
@@ -384,8 +386,10 @@ function App() {
       const afWC = (cur.wildCards || []).map(m => !m.completed ? { ...m, score1: 0, score2: 0, completed: true, completedAt: nw(), forfeit: true, autoForfeit: true } : m);
       if (cur.boxes) cur.boxes.forEach((box, bi) => { const bm = afBM.filter(m => m.box === bi); const realBM = bm.filter(m => m.completed && !m.forfeit && !(m.score1 === 0 && m.score2 === 0)); if (realBM.length > 0) { const bs = boxSt(box.players, realBM); if (bs[0]) bon.push({ id: bs[0].id, pts: 3 }); if (bs[1]) bon.push({ id: bs[1].id, pts: 1 }); } });
       const past = [...(cur.pastCycles || []), { cycle: cur.cycleNumber, boxMatches: afBM, wildCards: afWC, openChallenges: cur.openChallenges || [], boxes: cur.boxes || [], bonuses: [...bon], startedAt: cur.cycleStart, randomized: cur.cycleRandomized || false }];
+      // Default everyone IN for next round — they can leave if they don't want to play.
+      const allActiveIds = (cur.players || []).map(p => p.id);
       flash("Round " + cur.cycleNumber + " ended.");
-      return withLog({ ...cur, pastCycles: past, boxes: [], boxMatches: [], wildCards: [], openChallenges: [] }, "CYCLE_ENDED_EARLY", "Round " + cur.cycleNumber);
+      return withLog({ ...cur, pastCycles: past, boxes: [], boxMatches: [], wildCards: [], openChallenges: [], checkedIn: allActiveIds }, "CYCLE_ENDED_EARLY", "Round " + cur.cycleNumber);
     }, "Couldn't end round");
   };
   // Build the archive object for the current round (dry-run, no save)
@@ -1285,6 +1289,17 @@ function CheckInV({ st, ladder, togCI, selLast, autoOpen, onAutoOpenDone }) {
         {other.map(s => playerRow(s, togCI, "Leave", leaveBtn, null))}
       </div>
     )}
+
+    {/* Not Signed Up — active players who haven't checked in for the next round.
+        Lets them rejoin without going through admin approval again. */}
+    {notPlaying.length > 0 && (<>
+      {secBtn("Not Signed Up", showRemaining, () => setShowRemaining(v => !v), notPlaying.length)}
+      {showRemaining && (
+        <div style={gc}>
+          {notPlaying.map(s => playerRow(s, togCI, "Join", joinBtn, null))}
+        </div>
+      )}
+    </>)}
   </div>);
 }
 
