@@ -198,8 +198,13 @@ function getChampions(st, gn) {
 }
 
 
-const PLAYERS = ["Gianna Acitelli","Elvira Aguillon","Koula Angelinas","Jean Marie Apruzzese","Gerard Apruzzese","Frank Banta","Bart Bess","Glen Besser","Sreyansh Biswal","Amanda Bloshuk","Eduardo Bonilla","Jason Borreo","Brad Boyle","Adam Breen","Duncan Brennan","Kenneth Carpenter","Hans Castaneda","Miguel Castro","Karen Chen","Steven Ciardiello","Dan Conlisk","Christopher Cook","Bridget Cooney","Rafael Cordero","Mike Cottam","Nicholas Cresta","Shawn Dacey","Zahra Derrick","James Driscoll","Matthew Farina","Susan Fattorusso","Lucy Ferrantelli","Sandy French","Daniel Giordano","Daniel Goldman","Brett Gottlieb","Korey Grabowski","Daniel Graham","David Gray","Andrew Grider","Max Gustafson","John Haaf","Melissa Haime","Christopher Halloran","William Hankers","Jake Hannah","Lauren Hayes","Anthony Helmandollar","Ian Holland","Hussein Hussein","Robert Hyman","Peter Ibelli","Patrick Judge","Brian Kittner","Sam Klaber","Jared Konigsberg","John Kopans","Werner Kratovil","Jonathan Lea","Jeffrey Lehrman","Christopher Lepore","Wei Lin","Jack Linehan","David Luski","Jason Luski","Shayne Lyons","Sloan Martin","Gabriella Mascellino","Quinn McQuade","Adam Melnick","Mario Minera","Anna Ming","Cristin Mitchell","Melanie Mohr","Indira Negron","Payton Odom","Peter Papadakos","Anjali Pharsi","Regina Poniros","Delaney Reynolds","Stephanie Rivera","Janine Roberts","Maria Rodriguez","Charles Ruotolo","Michelle Santos","Merritt Scott","John Serzan","Tracy Shi","Matt Shore","Tracy Sonnabend","Kim Stirba","Carol Su","Stephen Suriano","Aaron Talan","Amanda Taylor","Anthony Venditti","Ivan Vidal","Hope Wasserman","Andrew Wietstock","Liying Yang","Thomas Yang","Ashley Yip","Michael Yurick"].map(n => ({ id: uid(), name: n, joinedAt: nw() }));
-const DEF = { players: PLAYERS, boxes: [], boxMatches: [], wildCards: [], openChallenges: [], checkedIn: [], pastCycles: [], cycleNumber: 0, cycleStart: null, cycleDurationWeeks: 4, auditLog: [], adminPin: null, announcement: null };
+// Hardcoded company roster — names available for self-signup.
+// To add/remove someone from the pool, edit this list and commit.
+const AVAILABLE_PLAYERS = ["Gianna Acitelli","Elvira Aguillon","Koula Angelinas","Jean Marie Apruzzese","Gerard Apruzzese","Frank Banta","Bart Bess","Glen Besser","Sreyansh Biswal","Amanda Bloshuk","Eduardo Bonilla","Jason Borreo","Brad Boyle","Adam Breen","Duncan Brennan","Kenneth Carpenter","Hans Castaneda","Miguel Castro","Karen Chen","Steven Ciardiello","Dan Conlisk","Christopher Cook","Bridget Cooney","Rafael Cordero","Mike Cottam","Nicholas Cresta","Shawn Dacey","Zahra Derrick","James Driscoll","Matthew Farina","Susan Fattorusso","Lucy Ferrantelli","Sandy French","Daniel Giordano","Daniel Goldman","Brett Gottlieb","Korey Grabowski","Daniel Graham","David Gray","Andrew Grider","Max Gustafson","John Haaf","Melissa Haime","Christopher Halloran","William Hankers","Jake Hannah","Lauren Hayes","Anthony Helmandollar","Ian Holland","Hussein Hussein","Robert Hyman","Peter Ibelli","Patrick Judge","Brian Kittner","Sam Klaber","Jared Konigsberg","John Kopans","Werner Kratovil","Jonathan Lea","Jeffrey Lehrman","Christopher Lepore","Wei Lin","Jack Linehan","David Luski","Jason Luski","Shayne Lyons","Sloan Martin","Gabriella Mascellino","Quinn McQuade","Adam Melnick","Mario Minera","Anna Ming","Cristin Mitchell","Melanie Mohr","Indira Negron","Payton Odom","Peter Papadakos","Anjali Pharsi","Regina Poniros","Delaney Reynolds","Stephanie Rivera","Janine Roberts","Maria Rodriguez","Charles Ruotolo","Michelle Santos","Merritt Scott","John Serzan","Tracy Shi","Matt Shore","Tracy Sonnabend","Kim Stirba","Carol Su","Stephen Suriano","Aaron Talan","Amanda Taylor","Anthony Venditti","Ivan Vidal","Hope Wasserman","Andrew Wietstock","Liying Yang","Thomas Yang","Ashley Yip","Michael Yurick"];
+// Active players start empty — they enter via the sign-up + admin-approval flow.
+// pendingPlayers: [{ name, requestedAt }]  — sign-ups waiting for admin approval.
+// availablePlayers: names still in the sign-up pool. Removed from pool once approved.
+const DEF = { players: [], availablePlayers: [...AVAILABLE_PLAYERS], pendingPlayers: [], boxes: [], boxMatches: [], wildCards: [], openChallenges: [], checkedIn: [], pastCycles: [], cycleNumber: 0, cycleStart: null, cycleDurationWeeks: 4, auditLog: [], adminPin: null, announcement: null };
 const withLog = (s, action, details) => { const al = [...(s.auditLog || []), { id: uid(), ts: nw(), action, details }]; return { ...s, auditLog: al.length > 200 ? al.slice(-200) : al }; };
 
 function useCD(cycleStart, weeks) { const [r, setR] = useState({ d: 0, h: 0, m: 0 }); useEffect(() => { const tick = () => { if (!cycleStart) { setR({ d: 0, h: 0, m: 0 }); return; } const end = new Date(new Date(cycleStart).getTime() + (weeks || 4) * 7 * 864e5); const diff = Math.max(0, end.getTime() - Date.now()); setR({ d: Math.floor(diff / 864e5), h: Math.floor((diff % 864e5) / 36e5), m: Math.floor((diff % 36e5) / 6e4) }); }; tick(); const id = setInterval(tick, 6e4); return () => clearInterval(id); }, [cycleStart, weeks]); return r; }
@@ -293,7 +298,10 @@ function App() {
     save(cur => {
       if ((cur.players || []).find(p => p.name.toLowerCase() === name.toLowerCase())) { flash("Duplicate name"); return null; }
       const np = { id: uid(), name, joinedAt: nw() };
-      return withLog({ ...cur, players: [...(cur.players || []), np] }, "PLAYER_ADDED", name);
+      // Admin-added players skip pending. Remove from available + pending in case the name was there.
+      const avail = (cur.availablePlayers || []).filter(n => n !== name);
+      const pending = (cur.pendingPlayers || []).filter(p => p.name !== name);
+      return withLog({ ...cur, players: [...(cur.players || []), np], availablePlayers: avail, pendingPlayers: pending }, "PLAYER_ADDED", name);
     }, "Couldn't add player");
     flash(name + " added!");
   };
@@ -301,9 +309,44 @@ function App() {
     save(cur => {
       const nm = (cur.players.find(p => p.id === id) || {}).name || id;
       const ff = arr => (arr || []).map(m => (m.player1 === id || m.player2 === id) && !m.completed ? { ...m, score1: 0, score2: 0, completed: true, completedAt: nw(), forfeit: true } : m);
+      // Per spec: removed players DO NOT return to available — they disappear entirely.
       return withLog({ ...cur, players: cur.players.filter(p => p.id !== id), checkedIn: (cur.checkedIn || []).filter(c => c !== id), boxMatches: ff(cur.boxMatches), wildCards: ff(cur.wildCards), openChallenges: ff(cur.openChallenges) }, "PLAYER_REMOVED", nm);
     }, "Couldn't remove player");
     flash("Removed");
+  };
+  // User picks their name from the available list → goes to pending approval.
+  // One pending entry per name (re-tapping does nothing).
+  const requestJoin = (name) => {
+    save(cur => {
+      const avail = cur.availablePlayers || [];
+      const pending = cur.pendingPlayers || [];
+      if (!avail.includes(name)) { flash("Not available"); return null; }
+      if (pending.some(p => p.name === name)) { flash("Already pending approval"); return null; }
+      if ((cur.players || []).some(p => p.name === name)) { flash("Already active"); return null; }
+      flash(name + " — submitted! Waiting for admin approval.");
+      return withLog({ ...cur, pendingPlayers: [...pending, { name, requestedAt: nw() }] }, "JOIN_REQUESTED", name);
+    }, "Couldn't submit");
+  };
+  // Admin approves a pending player → moves to active, removed from available.
+  const approvePlayer = (name) => {
+    save(cur => {
+      const pending = (cur.pendingPlayers || []).filter(p => p.name !== name);
+      const avail = (cur.availablePlayers || []).filter(n => n !== name);
+      if ((cur.players || []).some(p => p.name === name)) { flash("Already active"); return null; }
+      const np = { id: uid(), name, joinedAt: nw() };
+      flash(name + " approved!");
+      return withLog({ ...cur, players: [...(cur.players || []), np], pendingPlayers: pending, availablePlayers: avail }, "PLAYER_APPROVED", name);
+    }, "Couldn't approve");
+  };
+  // Admin rejects → name goes back to available (so they can try again later).
+  const rejectPlayer = (name) => {
+    save(cur => {
+      const pending = (cur.pendingPlayers || []).filter(p => p.name !== name);
+      const avail = (cur.availablePlayers || []);
+      const newAvail = avail.includes(name) ? avail : [...avail, name];
+      flash(name + " rejected");
+      return withLog({ ...cur, pendingPlayers: pending, availablePlayers: newAvail }, "PLAYER_REJECTED", name);
+    }, "Couldn't reject");
   };
   const togCI = (id) => {
     save(cur => {
@@ -538,13 +581,13 @@ function App() {
         </div>
       )}
       <main style={{ maxWidth: 600, margin: "0 auto", padding: "0 14px 110px", animation: "fadeIn .3s", position: "relative", zIndex: 1 }}>
-        {view === "home" && <Home st={st} ladder={activeLad} gn={gn} ini={ini} cd={cd} onJoin={() => { setView("checkin"); setNavIdx(4); setCheckInFocus(true); }} />}
+        {view === "home" && <Home st={st} ladder={activeLad} gn={gn} ini={ini} cd={cd} requestJoin={requestJoin} />}
         {view === "boxes" && <BoxesV st={st} gn={gn} ini={ini} logR={logR} ffM={ffM} />}
         {view === "matches" && <MatchesV st={st} gn={gn} logR={logR} ffM={ffM} />}
         {view === "challenge" && <ChallengeV players={st.players} newOC={newOC} />}
         {view === "checkin" && <CheckInV st={st} ladder={ladder} togCI={togCI} selLast={selLast} autoOpen={checkInFocus} onAutoOpenDone={() => setCheckInFocus(false)} />}
         {view === "rules" && <RulesV />}
-        {view === "admin" && <AdminV st={st} ladder={ladder} previewCyc={previewCyc} confirmCyc={confirmCyc} completeCyc={completeCyc} endEarlyCyc={endEarlyCyc} undoCyc={undoCyc} resetAll={resetAll} addP={addP} rmP={rmP} ffM={ffM} gn={gn} save={save} togCI={togCI} />}
+        {view === "admin" && <AdminV st={st} ladder={ladder} previewCyc={previewCyc} confirmCyc={confirmCyc} completeCyc={completeCyc} endEarlyCyc={endEarlyCyc} undoCyc={undoCyc} resetAll={resetAll} addP={addP} rmP={rmP} ffM={ffM} gn={gn} save={save} togCI={togCI} approvePlayer={approvePlayer} rejectPlayer={rejectPlayer} />}
       </main>
       <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 10, padding: "0 14px", paddingBottom: "max(10px, env(safe-area-inset-bottom))" }}>
         <nav style={{ display: "flex", justifyContent: "space-around", alignItems: "center", padding: "6px 4px", background: "rgba(255,255,255,.08)", backdropFilter: "blur(40px) saturate(200%)", WebkitBackdropFilter: "blur(40px) saturate(200%)", borderRadius: 28, border: "1px solid rgba(255,255,255,.18)", borderTop: "1px solid rgba(255,255,255,.28)", boxShadow: "0 8px 40px rgba(0,0,0,.4), inset 0 1px 0 rgba(255,255,255,.18)", position: "relative", marginBottom: 8, overflow: "hidden" }}>
@@ -625,7 +668,9 @@ function PlayerCard({ pid, st, ladder, gn, eloData, getPlayerHistory, onClose })
 }
 
 // ─── HOME ────────────────────────────────────────────────────
-function Home({ st, ladder, gn, ini, cd, onJoin }) {
+function Home({ st, ladder, gn, ini, cd, requestJoin }) {
+  const [showJoinPicker, setShowJoinPicker] = useState(false);
+  const [joinSearch, setJoinSearch] = useState("");
   const [exp, setExp] = useState(null);
   const [profileId, setProfileId] = useState(null);
   const [tieExplain, setTieExplain] = useState(null);
@@ -929,12 +974,46 @@ function Home({ st, ladder, gn, ini, cd, onJoin }) {
       {last5.length > 0 && <div style={{ marginTop: 12 }}><Sub>RECENT OPEN CHALLENGES</Sub><div style={{ ...gc, padding: 0, overflow: "hidden" }}>{last5.map(m => (<div key={m.id} style={{ display: "flex", alignItems: "center", padding: "8px 12px", borderBottom: "1px solid rgba(21,152,203,.06)" }}><span style={{ flex: 1, fontSize: 12, fontWeight: m.score1 > m.score2 ? 700 : 400, textAlign: "right", paddingRight: 8, color: m.score1 > m.score2 ? P.ok : P.off }}>{gn(m.player1)}</span><span style={{ fontSize: 13, fontWeight: 700, color: P.blue, width: 44, textAlign: "center" }}>{m.score1}-{m.score2}</span><span style={{ flex: 1, fontSize: 12, fontWeight: m.score2 > m.score1 ? 700 : 400, paddingLeft: 8, color: m.score2 > m.score1 ? P.ok : P.off }}>{gn(m.player2)}</span></div>))}</div></div>}
 
       <div style={{ textAlign: "center", padding: "20px 0 10px" }}>
-        <button onClick={onJoin} style={{ padding: "14px 36px", background: "linear-gradient(135deg," + P.orange + "," + P.amber + ")", border: "none", borderRadius: 14, color: P.navy, fontSize: 15, fontWeight: 700, cursor: "pointer", boxShadow: "0 4px 20px rgba(241,138,0,.3)", marginBottom: 16 }}>
+        <button onClick={() => { setShowJoinPicker(true); setJoinSearch(""); }} style={{ padding: "14px 36px", background: "linear-gradient(135deg," + P.orange + "," + P.amber + ")", border: "none", borderRadius: 14, color: P.navy, fontSize: 15, fontWeight: 700, cursor: "pointer", boxShadow: "0 4px 20px rgba(241,138,0,.3)", marginBottom: 16 }}>
           🎱 Join the League
         </button>
         <div style={{ width: 40, height: 1, background: "linear-gradient(90deg,transparent," + P.orange + ",transparent)", margin: "0 auto 10px" }} />
         <p style={{ fontSize: 12, color: P.dim, fontStyle: "italic", fontFamily: "Georgia,serif", letterSpacing: 2 }}>DRAck 'Em Up</p>
       </div>
+      {/* JOIN PICKER MODAL — pick your name from available players → goes to admin approval queue */}
+      {showJoinPicker && (() => {
+        const avail = [...(st.availablePlayers || [])].sort((a, b) => a.localeCompare(b));
+        const pendingNames = new Set((st.pendingPlayers || []).map(p => p.name));
+        const q = joinSearch.trim().toLowerCase();
+        const filtered = q ? avail.filter(n => n.toLowerCase().includes(q)) : avail;
+        return (
+          <div onClick={() => setShowJoinPicker(false)} style={{ position: "fixed", inset: 0, zIndex: 200, background: "rgba(0,10,20,.92)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16, animation: "fadeIn .2s" }}>
+            <div onClick={e => e.stopPropagation()} style={{ ...gc, maxWidth: 420, width: "100%", maxHeight: "85vh", display: "flex", flexDirection: "column", marginBottom: 0 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                <h3 style={{ fontSize: 17, fontWeight: 600, color: P.white, fontFamily: "Georgia,serif" }}>🎱 Join the League</h3>
+                <button onClick={() => setShowJoinPicker(false)} style={{ background: "none", border: "none", color: P.dim, fontSize: 22, cursor: "pointer", lineHeight: 1 }}>×</button>
+              </div>
+              <p style={{ fontSize: 11, color: P.grey, marginBottom: 10 }}>Pick your name below. Once an admin approves, you'll be added to the league.</p>
+              <input value={joinSearch} onChange={e => setJoinSearch(e.target.value)} placeholder="Search for your name..." style={{ ...inpS, width: "100%", marginBottom: 10, fontSize: 13 }} />
+              <div style={{ flex: 1, overflowY: "auto", borderRadius: 10, border: "1px solid " + P.gb, background: "rgba(0,20,40,.4)" }}>
+                {filtered.length === 0 && <p style={{ fontSize: 12, color: P.dim, textAlign: "center", padding: 20 }}>{q ? "No matches for \"" + joinSearch + "\"" : "No available players — see the admin if you should be on the list."}</p>}
+                {filtered.map(name => {
+                  const isPending = pendingNames.has(name);
+                  return (
+                    <div key={name} style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 12px", borderBottom: "1px solid rgba(21,152,203,.06)" }}>
+                      <span style={{ flex: 1, fontSize: 13, color: P.off }}>{name}</span>
+                      {isPending
+                        ? <span style={{ fontSize: 9, fontWeight: 700, color: P.amber, background: "rgba(255,173,51,.12)", border: "1px solid rgba(255,173,51,.3)", borderRadius: 6, padding: "3px 8px", letterSpacing: 1 }}>PENDING</span>
+                        : <button onClick={() => { requestJoin(name); }} style={{ padding: "5px 14px", background: "linear-gradient(135deg," + P.orange + "," + P.amber + ")", border: "none", borderRadius: 8, color: P.navy, fontSize: 11, fontWeight: 700, cursor: "pointer" }}>That's me</button>}
+                    </div>
+                  );
+                })}
+              </div>
+              <p style={{ fontSize: 10, color: P.dim, textAlign: "center", marginTop: 8 }}>Tap "That's me" next to your name. The admin will approve your request shortly.</p>
+            </div>
+          </div>
+        );
+      })()}
       {profileId && <PlayerCard pid={profileId} st={st} ladder={ladder} gn={gn} eloData={eloData} getPlayerHistory={getPlayerHistory} onClose={() => setProfileId(null)} />}
     </div>
   );
@@ -1613,7 +1692,7 @@ function PastCycleRow({ c, gn, cycleIdx, saveCycle }) {
   );
 }
 
-function AdminV({ st, ladder, previewCyc, confirmCyc, completeCyc, endEarlyCyc, undoCyc, resetAll, addP, rmP, ffM, gn, save, togCI }) {
+function AdminV({ st, ladder, previewCyc, confirmCyc, completeCyc, endEarlyCyc, undoCyc, resetAll, addP, rmP, ffM, gn, save, togCI, approvePlayer, rejectPlayer }) {
   const [pin, setPin] = useState(""); const [ok, setOk] = useState(false); const [err, setErr] = useState(false);
   const [cc, setCc] = useState(false); const [cr, setCr] = useState(false); const [cu, setCu] = useState(false); const [randomRound, setRandomRound] = useState(false);
   const [resetText, setResetText] = useState("");
@@ -1728,10 +1807,11 @@ function AdminV({ st, ladder, previewCyc, confirmCyc, completeCyc, endEarlyCyc, 
   return (<div style={{ paddingTop: 16 }}><Tt>Admin <span style={{ fontSize: 11, color: P.ok }}>{"\ud83d\udd13"}</span></Tt>
     <div style={gc}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: showPlayers ? 8 : 0 }}>
-        <h4 style={{ fontSize: 15, fontWeight: 600, color: P.white, fontFamily: "Georgia,serif" }}>Players ({st.players.length})</h4>
+        <h4 style={{ fontSize: 15, fontWeight: 600, color: P.white, fontFamily: "Georgia,serif" }}>Active Players ({st.players.length})</h4>
         <button onClick={() => setShowPlayers(v => !v)} style={{ background: "none", border: "none", color: P.dim, fontSize: 14, cursor: "pointer" }}>{showPlayers ? "\u25bc" : "\u25b6"}</button>
       </div>
       {showPlayers && <div>
+        <p style={{ fontSize: 10, color: P.dim, marginBottom: 8 }}>{(st.availablePlayers || []).length} available · {(st.pendingPlayers || []).length} pending approval</p>
         <div style={{ display: "flex", gap: 6, marginBottom: 8 }}><input value={nm} onChange={e => setNm(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && nm.trim()) { addP(nm); setNm(""); } }} placeholder="New player..." style={inpS} /><button onClick={() => { if (nm.trim()) { addP(nm); setNm(""); } }} style={{ padding: "10px 18px", background: "linear-gradient(135deg," + P.orange + "," + P.amber + ")", color: P.navy, border: "none", borderRadius: 10, fontWeight: 700, cursor: "pointer" }}>Add</button></div>
         <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search..." style={{ ...inpS, width: "100%", marginBottom: 8, flex: "none", fontSize: 12 }} />
         <div style={{ maxHeight: 250, overflowY: "auto" }}>{filtLad.map((s, i) => (
@@ -1743,6 +1823,23 @@ function AdminV({ st, ladder, previewCyc, confirmCyc, completeCyc, endEarlyCyc, 
           </div>))}</div>
       </div>}
     </div>
+
+    {(st.pendingPlayers || []).length > 0 && (
+      <div style={{ ...gc, background: "rgba(255,173,51,.06)", borderColor: "rgba(255,173,51,.3)" }}>
+        <h4 style={{ fontSize: 15, fontWeight: 600, color: P.amber, fontFamily: "Georgia,serif", marginBottom: 4 }}>Pending Approval ({st.pendingPlayers.length})</h4>
+        <p style={{ fontSize: 11, color: P.grey, marginBottom: 10 }}>These players requested to join. Approve adds them to active players; reject sends them back to the available list.</p>
+        {st.pendingPlayers.map(p => (
+          <div key={p.name} style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 4px", borderBottom: "1px solid rgba(255,173,51,.1)" }}>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 13, color: P.white, fontWeight: 600 }}>{p.name}</div>
+              <div style={{ fontSize: 10, color: P.dim }}>Signed up {fmtDate(p.requestedAt)} at {new Date(p.requestedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</div>
+            </div>
+            <button onClick={() => approvePlayer(p.name)} style={{ padding: "5px 12px", background: "linear-gradient(135deg,#34D399,#059669)", border: "none", borderRadius: 8, color: "#fff", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>Approve</button>
+            <button onClick={() => rejectPlayer(p.name)} style={{ padding: "5px 12px", background: "transparent", border: "1px solid " + P.bad, borderRadius: 8, color: P.bad, fontSize: 11, fontWeight: 700, cursor: "pointer" }}>Reject</button>
+          </div>
+        ))}
+      </div>
+    )}
 
     <div style={gc}><h4 style={{ fontSize: 15, fontWeight: 600, color: P.white, marginBottom: 6, fontFamily: "Georgia,serif" }}>Round Duration</h4>
       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
