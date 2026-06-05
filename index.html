@@ -537,7 +537,16 @@ function App() {
   const onTouchEnd = (e) => { if (e.changedTouches[0].clientY - touchStartY.current > 70 && window.scrollY === 0) forceRefresh(); };
   const cd = useCD(st?.cycleStart, st?.cycleDurationWeeks);
   const ladder = useMemo(() => st ? calcLad(st.players, st) : [], [st]);
-  const activeIds = st ? new Set([...(st.boxes || []).flatMap(b => b.players), ...(st.boxMatches || []).filter(m => m.completed).flatMap(m => [m.player1, m.player2])]) : new Set();
+  const activeIds = st ? new Set([
+    // Players in the currently active round's boxes
+    ...(st.boxes || []).flatMap(b => b.players),
+    // Players who completed matches in the current round
+    ...(st.boxMatches || []).filter(m => m.completed).flatMap(m => [m.player1, m.player2]),
+    // Players seeded into the bracket (covers the bracket phase, where the
+    // current round's boxes/matches are empty but the standings should still
+    // show every player who made it into the tournament)
+    ...((st.bracket && st.bracket.seeds) || []).map(s => s.id).filter(Boolean),
+  ]) : new Set();
   const activeLad = ladder.filter(s => activeIds.has(s.id));
   const gn = (id) => { if (!st) return "?"; const p = st.players.find(x => x.id === id); return p ? p.name : "?"; };
   const ini = (id) => gn(id).split(" ").map(w => w[0]).join("").toUpperCase().slice(0, 3);
