@@ -69,13 +69,62 @@ function buildBoxes(ids, lad, randomize = true) {
 }
 function genBM(boxes) { const m = []; boxes.forEach((b, bi) => { for (let i = 0; i < b.players.length; i++) for (let j = i + 1; j < b.players.length; j++) m.push({ id: uid(), type: "box", box: bi, boxName: b.name, player1: b.players[i], player2: b.players[j], score1: null, score2: null, completed: false, completedAt: null }); }); return m; }
 
+// ─── Swing-box point scaling ──────────────────────────────────────────────
+// Every player in a 4-person box plays exactly 3 games. Swing boxes can have
+// 5, 6, or 7 players, so each player plays 4, 5, or 6 games respectively —
+// more games = more chances to earn points = unfair point inflation.
+//
+// To make seeding fair across box sizes, we scale match points (win/loss)
+// by a factor of (3 / actualGamesPerPlayer). For 4-person boxes the factor
+// is always 1.0 so they're unaffected. For a 5-person swing box it's 0.75,
+// a 6-box is 0.60, a 7-box is 0.50.
+//
+// What IS scaled: the win-points (4 for win-with-loss, 5 for shutout) and
+// loser-points (0 for shutout-loss, 2 for win-with-rack).
+// What is NOT scaled: 1st-place bonus (+3), 2nd-place bonus (+1), forfeit
+// penalty (-1). Positional bonuses earn the same in any box size because
+// finishing top of a 6-box is harder than top of a 4-box.
+//
+// Computes from match-list shape so it works for current AND historical rounds.
+function gamesPerPlayerForBox(boxPlayerIds, matchesInBox) {
+  if (!boxPlayerIds || boxPlayerIds.length === 0) return 3;
+  const counts = {};
+  boxPlayerIds.forEach(id => { counts[id] = 0; });
+  matchesInBox.forEach(m => {
+    if (counts[m.player1] !== undefined) counts[m.player1]++;
+    if (counts[m.player2] !== undefined) counts[m.player2]++;
+  });
+  // Most-common game count (mode). Resilient to in-progress rounds where some
+  // matches aren't scheduled yet — we look at what the schedule WILL be when
+  // matches are present, which mirrors the full round-robin pattern.
+  const vals = Object.values(counts).filter(v => v > 0);
+  if (vals.length === 0) return 3;
+  return Math.max(...vals); // full RR → every player has same count
+}
+function scaleFactor(gamesPerPlayer) {
+  // Returns the multiplier to apply to match points so that the per-player
+  // total scales as if 3 games were played.
+  if (!gamesPerPlayer || gamesPerPlayer <= 3) return 1.0;
+  return 3 / gamesPerPlayer;
+}
+// Display helper — 1 decimal place, but drop ".0" for clean integers
+function fmtPts(p) {
+  if (p === null || p === undefined) return "0";
+  const r = Math.round(p * 10) / 10;
+  return Number.isInteger(r) ? String(r) : r.toFixed(1);
+}
+
 function boxSt(pids, matches) {
   const s = {}; pids.forEach(id => { s[id] = { id, pts: 0, w: 0, l: 0, rw: 0, rl: 0 }; });
+  // Determine per-player game count for this box, derive scaling factor.
+  const gpp = gamesPerPlayerForBox(pids, matches.filter(m => m.completed));
+  const sf = scaleFactor(gpp);
   matches.filter(m => m.completed).forEach(m => { if (!s[m.player1] || !s[m.player2]) return;
     if (m.forfeit || (m.score1 === 0 && m.score2 === 0)) return;
     s[m.player1].rw += m.score1; s[m.player1].rl += m.score2; s[m.player2].rw += m.score2; s[m.player2].rl += m.score1;
-    if (m.score1 > m.score2) { s[m.player1].pts += m.score2 === 0 ? 5 : 4; s[m.player1].w++; s[m.player2].pts += m.score2 > 0 ? 2 : 0; s[m.player2].l++; }
-    else { s[m.player2].pts += m.score1 === 0 ? 5 : 4; s[m.player2].w++; s[m.player1].pts += m.score1 > 0 ? 2 : 0; s[m.player1].l++; } });
+    // Match points scaled by sf. Win counts (w/l) and rack counts (rw/rl) are NOT scaled.
+    if (m.score1 > m.score2) { s[m.player1].pts += (m.score2 === 0 ? 5 : 4) * sf; s[m.player1].w++; s[m.player2].pts += (m.score2 > 0 ? 2 : 0) * sf; s[m.player2].l++; }
+    else { s[m.player2].pts += (m.score1 === 0 ? 5 : 4) * sf; s[m.player2].w++; s[m.player1].pts += (m.score1 > 0 ? 2 : 0) * sf; s[m.player1].l++; } });
   return Object.values(s).sort((a, b) => {
     if (b.pts !== a.pts) return b.pts - a.pts;
     let aW = 0, bW = 0;
@@ -87,19 +136,38 @@ function boxSt(pids, matches) {
 
 function calcLad(players, st) {
   const s = {}; players.forEach(p => { s[p.id] = { id: p.id, name: p.name, points: 0, boxPts: 0, wins: 0, losses: 0, rw: 0, rl: 0, mp: 0, last: p.joinedAt, inactive: false, atRisk: false, noPlayedRounds: 0, streak: 0 }; });
+  // Build a per-match scaling map: matchId → scale factor. We need this because
+  // calcLad iterates matches in chronological order across all rounds, but the
+  // scaling factor depends on the BOX a match was played in, not the match itself.
+  const matchScale = {};
+  const buildMatchScale = (boxes, boxMatches) => {
+    (boxes || []).forEach((box, bi) => {
+      const bm = (boxMatches || []).filter(m => m.box === bi);
+      const completedBM = bm.filter(m => m.completed);
+      const gpp = gamesPerPlayerForBox(box.players, completedBM);
+      const sf = scaleFactor(gpp);
+      bm.forEach(m => { matchScale[m.id] = sf; });
+    });
+  };
+  buildMatchScale(st.boxes, st.boxMatches);
+  (st.pastCycles || []).forEach(c => buildMatchScale(c.boxes, c.boxMatches));
+
   const all = [...(st.boxMatches || [])];
   (st.pastCycles || []).forEach(c => { (c.boxMatches || []).forEach(m => all.push(m)); (c.bonuses || []).forEach(b => { if (s[b.id]) s[b.id].points += b.pts; }); });
-  // Sort by completedAt for streak calc
   const sorted = all.filter(m => m.completed).sort((a, b) => (a.completedAt || "").localeCompare(b.completedAt || ""));
   sorted.forEach(m => {
     const a = s[m.player1], b = s[m.player2]; if (!a || !b) return;
     if (m.forfeit || (m.score1 === 0 && m.score2 === 0)) return;
     a.mp++; b.mp++; a.rw += m.score1; a.rl += m.score2; b.rw += m.score2; b.rl += m.score1;
     if (m.completedAt) { if (m.completedAt > a.last) a.last = m.completedAt; if (m.completedAt > b.last) b.last = m.completedAt; }
-    const w1 = m.score1 > m.score2; const wp = w1 ? (m.score2 === 0 ? 5 : 4) : (m.score1 === 0 ? 5 : 4); const lp = w1 ? (m.score2 > 0 ? 2 : 0) : (m.score1 > 0 ? 2 : 0);
+    const sf = matchScale[m.id] || 1.0;
+    const w1 = m.score1 > m.score2; const wp = (w1 ? (m.score2 === 0 ? 5 : 4) : (m.score1 === 0 ? 5 : 4)) * sf; const lp = (w1 ? (m.score2 > 0 ? 2 : 0) : (m.score1 > 0 ? 2 : 0)) * sf;
     if (w1) { a.points += wp; a.boxPts += wp; a.wins++; b.points += lp; b.boxPts += lp; b.losses++; a.streak = a.streak > 0 ? a.streak + 1 : 1; b.streak = 0; }
     else { b.points += wp; b.boxPts += wp; b.wins++; a.points += lp; a.boxPts += lp; a.losses++; b.streak = b.streak > 0 ? b.streak + 1 : 1; a.streak = 0; }
   });
+  // Note: 1st-place (+3) and 2nd-place (+1) bonuses are NOT scaled — they're
+  // positional, and finishing top of a 6-box is genuinely harder than top of
+  // a 4-box, so the bonus should be the same regardless of box size.
   if (st.boxes && st.boxMatches) { st.boxes.forEach((box, bi) => { const bm = st.boxMatches.filter(m => m.box === bi); const realBM = bm.filter(m => m.completed && !m.forfeit && !(m.score1 === 0 && m.score2 === 0)); if (realBM.length > 0 && bm.every(m => m.completed)) { const bs = boxSt(box.players, realBM); if (bs[0] && s[bs[0].id]) { s[bs[0].id].points += 3; s[bs[0].id].boxPts += 3; } if (bs[1] && s[bs[1].id]) { s[bs[1].id].points += 1; s[bs[1].id].boxPts += 1; } } }); }
   (st.pastCycles || []).forEach(c => { (c.bonuses || []).forEach(b => { if (s[b.id] && b.pts > 0) s[b.id].boxPts += b.pts; }); });
   // ─── 14-day no-play penalty ───
@@ -426,7 +494,11 @@ function App() {
       });
     } catch (e) {
       console.error("Save failed:", e);
-      flash(errMsg || "Save failed — your change wasn't applied. Try again.");
+      // Show the actual error message to help diagnose — the generic fallback
+      // hid the real reason. Strip the "Refused: " prefix that comes from our
+      // own guards for a cleaner toast.
+      const msg = (e && e.message) ? String(e.message).replace(/^Refused:\s*/, "") : "";
+      flash(errMsg ? (errMsg + (msg ? " — " + msg : "")) : (msg || "Save failed — your change wasn't applied."));
     }
   }, []);
   const forceRefresh = useCallback(() => { setRefreshing(true); DOC_REF.get().then(doc => { if (doc.exists) setSt(doc.data()); }).catch(() => {}).finally(() => setRefreshing(false)); }, []);
@@ -690,22 +762,24 @@ function App() {
   const endSeedingPhase = () => {
     autoBackup("pre-bracket-creation");
     save(cur => {
-      if (cur.seedingPhaseEnded) { flash("Seeding already ended"); return null; }
-      // Archive any in-progress round first
-      let working = cur;
-      if ((cur.cycleNumber || 0) > 0 && (cur.boxes || []).length > 0) {
-        const bon = [];
-        const afBM = (cur.boxMatches || []).map(m => !m.completed ? { ...m, score1: 0, score2: 0, completed: true, completedAt: nw(), forfeit: true, autoForfeit: true } : m);
-        if (cur.boxes) cur.boxes.forEach((box, bi) => { const bm = afBM.filter(m => m.box === bi); const realBM = bm.filter(m => m.completed && !m.forfeit && !(m.score1 === 0 && m.score2 === 0)); if (realBM.length > 0) { const bs = boxSt(box.players, realBM); if (bs[0]) bon.push({ id: bs[0].id, pts: 3 }); if (bs[1]) bon.push({ id: bs[1].id, pts: 1 }); } });
-        const past = [...(cur.pastCycles || []), { cycle: cur.cycleNumber, boxMatches: afBM, boxes: cur.boxes || [], bonuses: [...bon], startedAt: cur.cycleStart, randomized: cur.cycleRandomized || false }];
-        working = { ...cur, pastCycles: past, boxes: [], boxMatches: [] };
-      }
-      // Compute final standings using all archived cycles
-      const finalLad = calcLad(working.players, working);
-      const eloResult = calcElo(working.players, working);
-      // Eligible bracket participants = active players who played at least 1 real match
-      const eligible = finalLad.filter(s => (s.mp || 0) > 0 && !s.inactive);
-      if (eligible.length < 2) { flash("Need at least 2 active players for bracket"); return null; }
+      try {
+        if (cur.seedingPhaseEnded) { flash("Seeding already ended"); return null; }
+        // Archive any in-progress round first
+        let working = cur;
+        if ((cur.cycleNumber || 0) > 0 && (cur.boxes || []).length > 0) {
+          const bon = [];
+          const afBM = (cur.boxMatches || []).map(m => !m.completed ? { ...m, score1: 0, score2: 0, completed: true, completedAt: nw(), forfeit: true, autoForfeit: true } : m);
+          if (cur.boxes) cur.boxes.forEach((box, bi) => { const bm = afBM.filter(m => m.box === bi); const realBM = bm.filter(m => m.completed && !m.forfeit && !(m.score1 === 0 && m.score2 === 0)); if (realBM.length > 0) { const bs = boxSt(box.players, realBM); if (bs[0]) bon.push({ id: bs[0].id, pts: 3 }); if (bs[1]) bon.push({ id: bs[1].id, pts: 1 }); } });
+          const past = [...(cur.pastCycles || []), { cycle: cur.cycleNumber, boxMatches: afBM, boxes: cur.boxes || [], bonuses: [...bon], startedAt: cur.cycleStart, randomized: cur.cycleRandomized || false }];
+          working = { ...cur, pastCycles: past, boxes: [], boxMatches: [] };
+        }
+        // Compute final standings using all archived cycles
+        const finalLad = calcLad(working.players, working);
+        const eloResult = calcElo(working.players, working);
+        // Eligible bracket participants = active players who played at least 1 real match
+        const eligible = finalLad.filter(s => (s.mp || 0) > 0 && !s.inactive);
+        console.log("[endSeedingPhase] eligible:", eligible.length, "of", finalLad.length, "total players");
+        if (eligible.length < 2) { flash("Need at least 2 active players for bracket"); return null; }
       // Sort by points desc, ELO desc as tiebreaker
       const sorted = [...eligible].sort((a, b) => {
         if (b.points !== a.points) return b.points - a.points;
@@ -820,6 +894,12 @@ function App() {
       const bracket = { size: bracketSize, numRounds, seeds, rounds, createdAt: nw() };
       flash("Seeding phase ended — bracket unlocked!");
       return withLog({ ...working, seedingPhaseEnded: true, bracket, checkedIn: [] }, "SEEDING_ENDED", `Bracket created with ${sorted.length} players (size ${bracketSize})`);
+      } catch (innerErr) {
+        // Log the actual error from inside the mutator so we can diagnose what
+        // went wrong (calcLad, boxSt, bracket construction, etc.).
+        console.error("[endSeedingPhase] mutator threw:", innerErr);
+        throw innerErr;
+      }
     }, "Couldn't end seeding phase");
   };
 
@@ -1066,7 +1146,6 @@ function Home({ st, ladder, gn, ini, cd, requestJoin }) {
     return "Tied on all tiebreakers";
   };
   const [activeOnly, setActiveOnly] = useState(false);
-  const [showChampHistory, setShowChampHistory] = useState(false);
   const displayLad = ladder.filter(s => s.mp > 0 && (activeOnly ? !s.inactive : true));
   const eloData = useMemo(() => calcElo(st.players, st), [st]);
   const prevElo = useMemo(() => { const prevSt = { ...st, boxMatches: [] }; return calcElo(st.players, prevSt); }, [st]);
@@ -1107,12 +1186,6 @@ function Home({ st, ladder, gn, ini, cd, requestJoin }) {
     return results.slice(0, 10);
   };
 
-  // Last completed cycle champions (all box winners)
-  const lastCyc = st.pastCycles && st.pastCycles.length ? st.pastCycles[st.pastCycles.length - 1] : null;
-  const lastChamps = lastCyc
-    ? (lastCyc.boxes || []).map((box, bi) => { const bm = (lastCyc.boxMatches || []).filter(m => m.box === bi && m.completed && !m.forfeit && !(m.score1 === 0 && m.score2 === 0)); const bs = bm.length ? boxSt(box.players, bm) : []; return bs[0] ? { box: box.name, name: gn(bs[0].id), isSwing: box.isSwing } : null; }).filter(Boolean)
-    : [];
-
   // Cycle progress summary
   const boxSummaries = (st.boxes || []).map((box, bi) => {
     const bm = (st.boxMatches || []).filter(m => m.box === bi);
@@ -1131,19 +1204,6 @@ function Home({ st, ladder, gn, ini, cd, requestJoin }) {
   const pendingMatches = (st.boxMatches || []).filter(m => !m.completed);
   const overdueCount = pendingMatches.length;
   const urgency = daysLeft <= 3 ? "urgent" : daysLeft <= 7 ? "warning" : "normal";
-
-  const historyRows = [...st.pastCycles].reverse().map(c => {
-    const cChamps = (c.boxes || []).map((box, bi) => { const bm = (c.boxMatches || []).filter(m => m.box === bi && m.completed && !m.forfeit && !(m.score1 === 0 && m.score2 === 0)); const bs = bm.length ? boxSt(box.players, bm) : []; return bs[0] ? { box: box.name, name: gn(bs[0].id) } : null; }).filter(Boolean);
-    if (!cChamps.length) return null;
-    return (
-      <div key={c.cycle} style={{ marginBottom: 10 }}>
-        <p style={{ fontSize: 9, color: c.randomized ? P.wc : P.dim, fontWeight: 700, letterSpacing: 1, marginBottom: 4 }}>{c.randomized ? "🎲 " : ""}ROUND {c.cycle} · {fmtDate(c.startedAt)}{c.randomized ? " · RANDOMIZED" : ""}</p>
-        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-          {cChamps.map((w, i) => <span key={i} style={{ fontSize: 10, color: P.off, background: c.randomized ? "rgba(196,161,255,.12)" : "rgba(0,48,82,.4)", padding: "3px 8px", borderRadius: 6 }}>{c.randomized ? "🎱" : "\ud83e\udd47"} {w.box}: {w.name}</span>)}
-        </div>
-      </div>
-    );
-  });
 
   // Season Awards
   const activeLad = ladder.filter(s => s.mp > 0);
@@ -1236,63 +1296,34 @@ function Home({ st, ladder, gn, ini, cd, requestJoin }) {
             <p style={{ fontSize: 9, color: P.blue, letterSpacing: 3, fontWeight: 700 }}>ROUND {st.cycleNumber} PROGRESS</p>
             <span style={{ fontSize: 10, color: P.dim }}>{totalDone} played · {totalPend} pending</span>
           </div>
-          {boxSummaries.map(({ box, bi, done, total, bs, complete }) => (
-            <div key={bi} style={{ display: "flex", alignItems: "center", gap: 10, padding: "7px 0", borderBottom: bi < boxSummaries.length - 1 ? "1px solid rgba(21,152,203,.08)" : "none" }}>
-              <span style={{ fontSize: 9, fontWeight: 700, color: P.orange, width: 52, letterSpacing: 1 }}>{box.name.toUpperCase()}</span>
-              <span style={{ flex: 1, fontSize: 12, color: complete ? P.ok : P.off }}>
-                {complete ? "\u2713 " + (bs[0] ? gn(bs[0].id) : "—") : done > 0 ? (bs[0] ? gn(bs[0].id) + " leads" : "—") : "No matches yet"}
-              </span>
-              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                <div style={{ width: 48, height: 4, borderRadius: 2, background: "rgba(255,255,255,.1)", overflow: "hidden" }}>
-                  <div style={{ width: total > 0 ? (done / total * 100) + "%" : "0%", height: "100%", background: complete ? P.ok : P.orange, borderRadius: 2, transition: "width .3s" }} />
+          {boxSummaries.map(({ box, bi, done, total, complete }) => {
+            const n = (box.players || []).length;
+            const isSwing = !!box.isSwing && n !== 4;
+            return (
+              <div key={bi} style={{ display: "flex", alignItems: "center", gap: 10, padding: "7px 0", borderBottom: bi < boxSummaries.length - 1 ? "1px solid rgba(21,152,203,.08)" : "none" }}>
+                <span style={{ fontSize: 9, fontWeight: 700, color: P.orange, width: 52, letterSpacing: 1 }}>{box.name.toUpperCase()}</span>
+                <span style={{ flex: 1, fontSize: 11, color: P.dim }}>
+                  {n} player{n !== 1 ? "s" : ""}{isSwing ? " · swing" : ""}
+                  {complete && <span style={{ marginLeft: 8, color: P.ok, fontWeight: 700 }}>✓ Complete</span>}
+                </span>
+                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <div style={{ width: 48, height: 4, borderRadius: 2, background: "rgba(255,255,255,.1)", overflow: "hidden" }}>
+                    <div style={{ width: total > 0 ? (done / total * 100) + "%" : "0%", height: "100%", background: complete ? P.ok : P.orange, borderRadius: 2, transition: "width .3s" }} />
+                  </div>
+                  <span style={{ fontSize: 9, color: P.dim, width: 30, textAlign: "right" }}>{done}/{total}</span>
                 </div>
-                <span style={{ fontSize: 9, color: P.dim, width: 22, textAlign: "right" }}>{done}/{total}</span>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
 
-      {/* Last Round Champions */}
-      {lastChamps.length > 0 && (
-        lastCyc.randomized ? (
-          <div style={{ ...gc, padding: "12px 16px", background: "linear-gradient(135deg, rgba(196,161,255,.1), rgba(21,152,203,.08))", borderColor: "rgba(196,161,255,.3)" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
-              <p style={{ fontSize: 9, color: P.wc, letterSpacing: 3, fontWeight: 700 }}>🎲 ROUND {lastCyc.cycle} · RANDOMIZED</p>
-              {st.pastCycles.length > 1 && (
-                <button onClick={() => setShowChampHistory(v => !v)} style={{ fontSize: 9, fontWeight: 700, padding: "3px 10px", borderRadius: 10, background: showChampHistory ? "rgba(196,161,255,.2)" : "transparent", border: "1px solid rgba(196,161,255,.4)", color: P.wc, cursor: "pointer" }}>
-                  🎲 History {showChampHistory ? "▲" : "▼"}
-                </button>
-              )}
-            </div>
-            <p style={{ fontSize: 10, color: P.dim, marginBottom: 10 }}>Boxes were randomly assigned — all winners equal</p>
-            {lastChamps.map((w, i) => (
-              <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "5px 0", borderBottom: i < lastChamps.length - 1 ? "1px solid rgba(196,161,255,.08)" : "none" }}>
-                <span style={{ fontSize: 9, fontWeight: 700, color: P.wc, width: 60 }}>{w.box}</span>
-                <span style={{ flex: 1, fontSize: 13, color: P.white, fontWeight: 600, fontFamily: "Georgia,serif" }}>🎱 {w.name}</span>
-              </div>
-            ))}
-            {showChampHistory && <div style={{ marginTop: 12, borderTop: "1px solid rgba(196,161,255,.15)", paddingTop: 10 }}>{historyRows}</div>}
-          </div>
-        ) : (
-          <div style={{ ...gc, padding: "12px 16px", background: "linear-gradient(135deg, rgba(241,138,0,.12), rgba(21,152,203,.08))", borderColor: "rgba(241,138,0,.3)" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-              <p style={{ fontSize: 9, color: P.orange, letterSpacing: 3, fontWeight: 700 }}>ROUND {lastCyc.cycle} CHAMPIONS</p>
-              {st.pastCycles.length > 1 && (
-                <button onClick={() => setShowChampHistory(v => !v)} style={{ fontSize: 9, fontWeight: 700, padding: "3px 10px", borderRadius: 10, background: showChampHistory ? "rgba(241,138,0,.2)" : "transparent", border: "1px solid rgba(241,138,0,.4)", color: P.amber, cursor: "pointer" }}>
-                  {"\ud83c\udfc6"} History {showChampHistory ? "▲" : "▼"}
-                </button>
-              )}
-            </div>
-            {lastChamps.map((w, i) => (
-              <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "5px 0", borderBottom: i < lastChamps.length - 1 ? "1px solid rgba(21,152,203,.08)" : "none" }}>
-                <span style={{ fontSize: 9, fontWeight: 700, color: P.orange, width: 60 }}>{w.box}</span>
-                <span style={{ flex: 1, fontSize: 13, color: P.white, fontWeight: 600, fontFamily: "Georgia,serif" }}>{"\ud83e\udd47"} {w.name}</span>
-              </div>
-            ))}
-            {showChampHistory && <div style={{ marginTop: 12, borderTop: "1px solid rgba(21,152,203,.12)", paddingTop: 10 }}>{historyRows}</div>}
-          </div>
-        )
+      {/* Between-rounds banner — shown when last round is complete but next hasn't started */}
+      {st.cycleNumber > 0 && boxSummaries.length === 0 && (st.pastCycles || []).length > 0 && !st.seedingPhaseEnded && (
+        <div style={{ ...gc, padding: "12px 16px", background: "linear-gradient(135deg, rgba(52,211,153,.1), rgba(21,152,203,.06))", borderColor: "rgba(52,211,153,.25)" }}>
+          <p style={{ fontSize: 9, color: P.ok, letterSpacing: 3, fontWeight: 700, marginBottom: 4 }}>✓ ROUND {st.cycleNumber} COMPLETE</p>
+          <p style={{ fontSize: 12, color: P.off }}>Waiting for {st.cycleNumber < SEEDING_ROUNDS ? `Round ${st.cycleNumber + 1}` : "the bracket"} to begin. Standings shown below are final for the seeding phase to date.</p>
+        </div>
       )}
 
       {!st.cycleNumber && <div style={{ textAlign: "center", padding: "40px 0" }}><p style={{ fontSize: 44 }}>{"\ud83c\udfb1"}</p><p style={{ color: P.grey, marginTop: 10 }}>No active round yet.</p></div>}
@@ -1312,8 +1343,8 @@ function Home({ st, ladder, gn, ini, cd, requestJoin }) {
                 <div onClick={() => setExp(exp === s.id ? null : s.id)} style={{ display: "flex", padding: "9px 10px", gap: 4, borderBottom: exp === s.id ? "none" : "1px solid rgba(21,152,203,.08)", background: i === 0 ? "rgba(241,138,0,.12)" : i % 2 === 0 ? "rgba(0,48,79,.2)" : "transparent", borderLeft: i === 0 ? "3px solid " + P.orange : "3px solid transparent", cursor: "pointer" }}>
                   <span style={{ width: 22, fontWeight: 700, fontSize: 12, color: i === 0 ? P.orange : i < 3 ? P.blue : P.dim }}>{i === 0 ? "\ud83d\udc51" : i + 1}{i > 0 && displayLad[i-1] && displayLad[i-1].points === s.points && <span onClick={(e) => { e.stopPropagation(); setTieExplain(tieExplain === s.id ? null : s.id); }} style={{ fontSize: 8, color: P.dim, cursor: "pointer", marginLeft: 1 }}>=</span>}</span>
                   <span style={{ flex: 1, fontWeight: i < 3 ? 600 : 400, fontSize: 12 }}><span onClick={(e) => { e.stopPropagation(); setProfileId(s.id); }} style={{ cursor: "pointer", borderBottom: "1px dashed " + P.dim }}>{s.name}</span><StreakBadge streak={s.streak} />{s.inactive && <span style={{ fontSize: 8, fontWeight: 700, color: P.bad, background: "rgba(248,113,113,.15)", border: "1px solid rgba(248,113,113,.35)", borderRadius: 4, padding: "1px 4px", marginLeft: 4, letterSpacing: .5 }}>NO PLAY</span>}{!s.inactive && s.atRisk && <span style={{ fontSize: 8, fontWeight: 700, color: P.amber, background: "rgba(255,173,51,.15)", border: "1px solid rgba(255,173,51,.35)", borderRadius: 4, padding: "1px 4px", marginLeft: 4, letterSpacing: .5 }}>AT RISK</span>}</span>
-                  <span style={{ width: 28, fontWeight: 700, color: P.orange, fontSize: 12 }}>{s.points}</span>
-                  <span style={{ width: 28, color: P.amber, fontSize: 11 }}>{s.boxPts}</span>
+                  <span style={{ width: 28, fontWeight: 700, color: P.orange, fontSize: 12 }}>{fmtPts(s.points)}</span>
+                  <span style={{ width: 28, color: P.amber, fontSize: 11 }}>{fmtPts(s.boxPts)}</span>
                   <span style={{ width: 22, color: P.ok, fontSize: 11 }}>{s.wins}</span>
                   <span style={{ width: 22, color: P.bad, fontSize: 11 }}>{s.losses}</span>
                 </div>
@@ -1489,12 +1520,13 @@ function BoxesV({ st, gn, ini, logR, ffM }) {
           <div key={bi} style={{ marginBottom: 16 }}>
             <div onClick={() => togCol("box_" + bi)} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, cursor: "pointer", userSelect: "none" }}>
               <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: 2, color: P.orange }}>{box.name.toUpperCase()}</span>
+              {(() => { const gpp = gamesPerPlayerForBox(box.players, bm.filter(m => m.completed)); const sf = scaleFactor(gpp); return sf < 1.0 && <span title={`Each player will play ${gpp} games. Match points are scaled by ${sf.toFixed(2)}× so swing-box totals are comparable to 4-person boxes.`} style={{ fontSize: 8, color: P.wc, fontWeight: 700, background: "rgba(196,161,255,.12)", border: "1px solid rgba(196,161,255,.3)", padding: "2px 7px", borderRadius: 10, letterSpacing: 0.5 }}>×{sf.toFixed(2)} SCALING</span>; })()}
               {done && <span style={{ fontSize: 8, color: P.ok, fontWeight: 700, background: "rgba(52,211,153,.1)", padding: "2px 8px", borderRadius: 10 }}>COMPLETE</span>}
               <span style={{ marginLeft: "auto", fontSize: 10, color: P.dim }}>{isCol ? "▶" : "▼"}</span>
             </div>
             {!isCol && <div style={{ ...gc, padding: 0, overflow: "hidden" }}><div style={{ overflowX: "auto" }}><table style={{ borderCollapse: "collapse", width: "100%", minWidth: pids.length * 50 + 130 }}>
               <thead><tr><th style={{ ...gth, textAlign: "left", minWidth: 80, position: "sticky", left: 0, zIndex: 1, background: P.mid }}>Player</th><th style={{ ...gth, width: 36 }}>Pts</th>{pids.map(id => <th key={id} style={{ ...gth, width: 46 }}>{ini(id)}</th>)}</tr></thead>
-              <tbody>{pids.map((pid, ri) => (<tr key={pid}><td style={{ ...gtd, textAlign: "left", fontWeight: 600, fontSize: 12, position: "sticky", left: 0, zIndex: 1, background: P.navy }}>{gn(pid)}</td><td style={{ ...gtd, fontWeight: 700, color: P.orange }}>{bs[ri] ? bs[ri].pts : 0}</td>
+              <tbody>{pids.map((pid, ri) => (<tr key={pid}><td style={{ ...gtd, textAlign: "left", fontWeight: 600, fontSize: 12, position: "sticky", left: 0, zIndex: 1, background: P.navy }}>{gn(pid)}</td><td style={{ ...gtd, fontWeight: 700, color: P.orange }}>{bs[ri] ? fmtPts(bs[ri].pts) : 0}</td>
                 {pids.map(oid => { if (pid === oid) return <td key={oid} style={{ ...gtd, background: "rgba(0,48,82,.4)" }} />; const sc = getS(bm, pid, oid); if (!sc) return <td key={oid} style={{ ...gtd, color: P.dim }}>{"—"}</td>; if (sc.pending) return <td key={oid} onClick={() => openEntry(sc.id)} style={{ ...gtd, background: activeMatchId === sc.id ? "rgba(241,138,0,.3)" : "rgba(241,138,0,.12)", cursor: "pointer" }}><span style={{ display: "inline-block", width: 8, height: 8, borderRadius: "50%", background: P.orange, animation: "pulse 1.8s infinite" }} /></td>; if (sc.s1 === 0 && sc.s2 === 0) return <td key={oid} style={{ ...gtd, color: P.dim, fontSize: 10, fontStyle: "italic" }}>FF</td>; const w = sc.s1 > sc.s2; return <td key={oid} style={{ ...gtd, fontWeight: 700, color: w ? P.ok : P.bad, background: w ? "rgba(52,211,153,.08)" : "rgba(248,113,113,.06)" }}>{sc.s1}-{sc.s2}</td>; })}
               </tr>))}</tbody></table></div>
               {activeM && <div style={{ padding: "0 8px 8px" }}><ScoreEntry m={activeM} list="boxMatches" /></div>}
@@ -1877,7 +1909,8 @@ function RulesV() {
             <Row title="Disputes" body="If a situation isn't covered, default to the DRA House &quot;Bar&quot; Rules. Universal rule: if there's a dispute — replay the shot. No exceptions." last />
           </Section>
           <Section title="Seeding Phase">
-            <Row title="Box Structure" body="Players are grouped into boxes of up to 4. Full round-robin within each box — 3 matches per round. When the player count isn't divisible by 4, one box may have 3, 5, or 6 players." />
+            <Row title="Box Structure" body="Players are grouped into boxes of 4. Full round-robin within each box — 3 matches per player. When the total player count isn't divisible by 4, one box (the swing box) holds the remainder and may have anywhere from 2 to 7 players." />
+            <Row title="Swing-Box Point Scaling" body="Swing-box players still play a full round-robin against everyone in their box. Their match points are then scaled down proportionally (e.g. ×0.75 for a 5-box, ×0.60 for a 6-box) so that everyone's per-round points are comparable to a standard 4-box. Bonuses for finishing 1st (+3) and 2nd (+1) in your box are NOT scaled — finishing top of a 6-box is just as valuable as winning a 4-box." />
             <Row title="Random Assignment" body="Boxes are randomly assigned at the start of every round — no carryover from previous rounds. Admins may re-shuffle or swap players before confirming." />
             <Row title="Cumulative Points" body={"Points earned across all " + SEEDING_ROUNDS + " seeding rounds determine your bracket seed. ELO breaks ties."} />
             <Row title="14-Day No-Play Penalty" body="Each round runs 14 days. If you complete zero matches in a round, you'll be moved to the bottom of the standings until you play in a future round. Forfeits do not count as participation — only completed matches with real scores do." last />
@@ -2061,7 +2094,7 @@ function PastCycleRow({ c, gn, cycleIdx, saveCycle }) {
                         <span style={{ flex: 1, fontSize: 12, fontWeight: ri === 0 ? 700 : 400 }}>{gn(s.id)}</span>
                         <span style={{ width: 24, fontSize: 11, color: P.ok, fontWeight: 600, textAlign: "center" }}>{s.w}</span>
                         <span style={{ width: 24, fontSize: 11, color: s.l > 0 ? P.bad : P.dim, textAlign: "center" }}>{s.l}</span>
-                        <span style={{ width: 34, fontSize: 12, color: ri === 0 ? P.orange : P.grey, fontWeight: 700, textAlign: "right" }}>{s.pts}</span>
+                        <span style={{ width: 34, fontSize: 12, color: ri === 0 ? P.orange : P.grey, fontWeight: 700, textAlign: "right" }}>{fmtPts(s.pts)}</span>
                       </div>
                     ))}
                   </div>
@@ -2239,7 +2272,19 @@ function AdminV({ st, ladder, previewCyc, confirmCyc, completeCyc, endEarlyCyc, 
           <div key={bi} style={{ ...gc, marginLeft: 16, marginRight: 16 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
               <h4 style={{ fontSize: 11, fontWeight: 700, color: P.blue, letterSpacing: 2, textTransform: "uppercase", margin: 0 }}>{box.name}</h4>
-              <span style={{ fontSize: 10, color: P.dim }}>{box.players.length} players</span>
+              {(() => {
+                const n = box.players.length;
+                // In a full round-robin, every player faces every other player exactly once.
+                const gpp = Math.max(0, n - 1);
+                const sf = gpp <= 3 ? 1.0 : (3 / gpp);
+                const gamesText = `${gpp} game${gpp === 1 ? '' : 's'}/player`;
+                return (
+                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <span style={{ fontSize: 10, color: P.dim }}>{n} players · {gamesText}</span>
+                    {sf < 1.0 && <span title={`Match points will be scaled by ${sf.toFixed(2)}× so this box's totals are comparable to 4-person boxes (3 games each).`} style={{ fontSize: 8, color: P.wc, fontWeight: 700, background: "rgba(196,161,255,.12)", border: "1px solid rgba(196,161,255,.3)", padding: "2px 6px", borderRadius: 10 }}>×{sf.toFixed(2)}</span>}
+                  </div>
+                );
+              })()}
             </div>
             {box.players.map(pid => {
               const isSrc = swapSrc && swapSrc.playerId === pid;
@@ -2257,7 +2302,7 @@ function AdminV({ st, ladder, previewCyc, confirmCyc, completeCyc, endEarlyCyc, 
                   <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                     <span style={{ flex: 1, fontSize: 13, color: P.off, fontWeight: isSrc ? 700 : 500 }}>{gn(pid)}</span>
                     {lrank && <span style={{ fontSize: 10, color: P.orange, fontWeight: 700 }}>#{lrank.rank}</span>}
-                    {lrank && <span style={{ fontSize: 10, color: P.dim }}>{lrank.points}pts</span>}
+                    {lrank && <span style={{ fontSize: 10, color: P.dim }}>{fmtPts(lrank.points)}pts</span>}
                     {(previewElo.played[pid] || 0) >= 3 && <span style={{ fontSize: 9, color: (previewElo.frac[pid] || 0) < 0.33 ? P.ok : (previewElo.frac[pid] || 0) > 0.66 ? P.bad : P.dim, fontWeight: 600 }}>ELO {Math.round(previewElo.ratings[pid] || 1000)}</span>}
                     {isMoved && <span style={{ fontSize: 9, color: P.orange, fontWeight: 700, background: "rgba(241,138,0,.15)", border: "1px solid rgba(241,138,0,.3)", borderRadius: 4, padding: "1px 5px" }}>MOVED</span>}
                     <span style={{ fontSize: 13, color: isSrc ? P.blue : P.dim }}>⇄</span>
@@ -2304,7 +2349,7 @@ function AdminV({ st, ladder, previewCyc, confirmCyc, completeCyc, endEarlyCyc, 
           <div key={s.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 4px", borderBottom: "1px solid rgba(21,152,203,.06)" }}>
             <span style={{ fontSize: 11, color: P.orange, fontWeight: 700, width: 24 }}>#{ladder.indexOf(s) + 1}</span>
             <span style={{ flex: 1, fontSize: 13 }}>{s.name}</span>
-            <span style={{ fontSize: 10, color: P.dim }}>{s.points}pts</span>
+            <span style={{ fontSize: 10, color: P.dim }}>{fmtPts(s.points)}pts</span>
             {rmId === s.id ? (<div style={{ display: "flex", gap: 3 }}><button onClick={() => { rmP(s.id); setRmId(null); }} style={{ padding: "3px 8px", background: P.bad, color: "#fff", border: "none", borderRadius: 6, fontSize: 10, fontWeight: 700, cursor: "pointer" }}>Remove</button><button onClick={() => setRmId(null)} style={{ padding: "3px 8px", background: P.mid, color: P.grey, border: "none", borderRadius: 6, fontSize: 10, cursor: "pointer" }}>Keep</button></div>) : <button onClick={() => setRmId(s.id)} style={{ background: "transparent", border: "none", color: P.dim, fontSize: 16, cursor: "pointer" }}>{"\u00d7"}</button>}
           </div>))}</div>
       </div>}
@@ -2503,9 +2548,21 @@ function AdminV({ st, ladder, previewCyc, confirmCyc, completeCyc, endEarlyCyc, 
     {(st.pastCycles || []).length > 0 && (() => {
       const lastC = st.pastCycles[st.pastCycles.length - 1];
       const rBM = (lastC.boxMatches || []).filter(m => m.completed && !m.forfeit);
+      // Per-box scale factors so top-scorer respects swing-box scaling
+      const boxScales = {};
+      (lastC.boxes || []).forEach((box, bi) => {
+        const completedBM = (lastC.boxMatches || []).filter(m => m.box === bi && m.completed);
+        const gpp = gamesPerPlayerForBox(box.players, completedBM);
+        boxScales[bi] = scaleFactor(gpp);
+      });
       const pTot = {};
       const ep = id => { if (!pTot[id]) pTot[id] = { id, pts: 0 }; };
-      rBM.forEach(m => { ep(m.player1); ep(m.player2); if (m.score1 > m.score2) { pTot[m.player1].pts += m.score2 === 0 ? 5 : 4; if (m.score2 > 0) pTot[m.player2].pts += 2; } else { pTot[m.player2].pts += m.score1 === 0 ? 5 : 4; if (m.score1 > 0) pTot[m.player1].pts += 2; } });
+      rBM.forEach(m => {
+        ep(m.player1); ep(m.player2);
+        const sf = boxScales[m.box] || 1.0;
+        if (m.score1 > m.score2) { pTot[m.player1].pts += (m.score2 === 0 ? 5 : 4) * sf; if (m.score2 > 0) pTot[m.player2].pts += 2 * sf; }
+        else { pTot[m.player2].pts += (m.score1 === 0 ? 5 : 4) * sf; if (m.score1 > 0) pTot[m.player1].pts += 2 * sf; }
+      });
       (lastC.bonuses || []).forEach(b => { ep(b.id); pTot[b.id].pts += b.pts; });
       const sorted = Object.values(pTot).sort((a, b) => b.pts - a.pts);
       const topScorer = sorted[0];
@@ -2535,7 +2592,7 @@ function AdminV({ st, ladder, previewCyc, confirmCyc, completeCyc, endEarlyCyc, 
             )}
             {topScorer && <div style={{ flex: 1, minWidth: 100, background: "rgba(0,20,40,.4)", borderRadius: 10, padding: "10px 12px", border: "1px solid rgba(21,152,203,.2)" }}>
               <p style={{ fontSize: 9, color: P.blue, fontWeight: 700, letterSpacing: 1, marginBottom: 4 }}>⭐ TOP SCORER</p>
-              <p style={{ fontSize: 13, color: P.white, fontWeight: 600 }}>{gn(topScorer.id)} <span style={{ color: P.orange, fontSize: 11 }}>{topScorer.pts}pts</span></p>
+              <p style={{ fontSize: 13, color: P.white, fontWeight: 600 }}>{gn(topScorer.id)} <span style={{ color: P.orange, fontSize: 11 }}>{fmtPts(topScorer.pts)}pts</span></p>
             </div>}
             <div style={{ flex: 1, minWidth: 80, background: "rgba(0,20,40,.4)", borderRadius: 10, padding: "10px 12px", border: "1px solid rgba(255,255,255,.08)" }}>
               <p style={{ fontSize: 9, color: P.dim, fontWeight: 700, letterSpacing: 1, marginBottom: 4 }}>🎱 MATCHES</p>
@@ -2565,7 +2622,7 @@ function AdminV({ st, ladder, previewCyc, confirmCyc, completeCyc, endEarlyCyc, 
       const date = new Date().toISOString().slice(0, 10);
       const dl = (content, filename, type) => { const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([content], { type })); a.download = filename; a.click(); URL.revokeObjectURL(a.href); };
       const exportJSON = () => dl(JSON.stringify(st, null, 2), `dra-pool-backup-${date}.json`, "application/json");
-      const exportCSV = () => { const elo = calcElo(st.players, st); const rows = [["Rank","Name","Points","Box Pts","Wins","Losses","Racks Won","Racks Lost","ELO"]]; ladder.forEach((s, i) => rows.push([i+1, s.name, s.points, s.boxPts, s.wins, s.losses, s.rw, s.rl, elo.ratings[s.id] || 1000])); dl(rows.map(r => r.join(",")).join("\n"), `dra-pool-standings-${date}.csv`, "text/csv"); };
+      const exportCSV = () => { const elo = calcElo(st.players, st); const rows = [["Rank","Name","Points","Box Pts","Wins","Losses","Racks Won","Racks Lost","ELO"]]; ladder.forEach((s, i) => rows.push([i+1, s.name, fmtPts(s.points), fmtPts(s.boxPts), s.wins, s.losses, s.rw, s.rl, elo.ratings[s.id] || 1000])); dl(rows.map(r => r.join(",")).join("\n"), `dra-pool-standings-${date}.csv`, "text/csv"); };
       return (
         <div style={gc}>
           <h4 style={{ fontSize: 15, fontWeight: 600, color: P.white, fontFamily: "Georgia,serif", marginBottom: 6 }}>Export Data</h4>
