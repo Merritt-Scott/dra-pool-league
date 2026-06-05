@@ -1148,7 +1148,59 @@ function Home({ st, ladder, gn, ini, cd, requestJoin }) {
     return "Tied on all tiebreakers";
   };
   const [activeOnly, setActiveOnly] = useState(false);
-  const displayLad = ladder.filter(s => s.mp > 0 && (activeOnly ? !s.inactive : true));
+
+  // ─── Bracket-phase view of the standings ──────────────────────────────────
+  // Once the bracket is built, the home page should show players ranked by
+  // their entry seed (not by ongoing seeding points, which are frozen) and
+  // tag each player with their elimination status: champion, still in, or
+  // eliminated in round N.
+  const bracketInfo = useMemo(() => {
+    if (!st.bracket || !st.seedingPhaseEnded) return null;
+    const info = {};
+    // Seed everyone in the bracket
+    (st.bracket.seeds || []).forEach(s => {
+      if (s.id) info[s.id] = { seed: s.seed, status: "in", eliminatedInRound: null };
+    });
+    // Walk through rounds. Loser of a completed (non-bye) match is eliminated.
+    (st.bracket.rounds || []).forEach((round, ri) => {
+      round.matches.forEach(m => {
+        if (!m.completed || m.isBye) return;
+        const loserId = m.winner === m.p1 ? m.p2 : m.p1;
+        if (loserId && info[loserId]) {
+          info[loserId].status = "eliminated";
+          info[loserId].eliminatedInRound = ri + 1;
+        }
+      });
+    });
+    // Champion overrides any "still in" — pull from st.champion if crowned
+    if (st.champion && info[st.champion.id]) {
+      info[st.champion.id].status = "champion";
+    }
+    return info;
+  }, [st.bracket, st.seedingPhaseEnded, st.champion]);
+
+  // Compose displayLad. During seeding phase: rank by live points (existing).
+  // During bracket phase: rank by bracket seed (frozen snapshot), but only show
+  // players who actually made it into the bracket.
+  const displayLad = useMemo(() => {
+    if (bracketInfo) {
+      // Bracket phase — rank by seed (lower seed = higher rank)
+      const inBracket = ladder.filter(s => bracketInfo[s.id]);
+      return inBracket.sort((a, b) => bracketInfo[a.id].seed - bracketInfo[b.id].seed);
+    }
+    return ladder.filter(s => s.mp > 0 && (activeOnly ? !s.inactive : true));
+  }, [ladder, bracketInfo, activeOnly]);
+
+  // Round label for elimination tags ("OUT R1", "OUT QF", etc.)
+  const eliminationRoundLabel = (ri) => {
+    if (!st.bracket) return "OUT";
+    const total = st.bracket.rounds.length;
+    if (ri === total) return "FINALIST";       // lost the final
+    if (ri === total - 1) return "OUT SF";     // lost the semi
+    if (ri === total - 2) return "OUT QF";     // lost the quarter
+    if (ri === total - 3) return "OUT R16";    // lost round of 16
+    return "OUT R" + ri;
+  };
   const eloData = useMemo(() => calcElo(st.players, st), [st]);
   const prevElo = useMemo(() => { const prevSt = { ...st, boxMatches: [] }; return calcElo(st.players, prevSt); }, [st]);
   const ELO_MIN = 3;
@@ -1333,22 +1385,78 @@ function Home({ st, ladder, gn, ini, cd, requestJoin }) {
       {st.cycleNumber > 0 && ladder.length > 0 && (
         <div>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <Sub>STANDINGS</Sub>
-            <button onClick={() => setActiveOnly(v => !v)} style={{ fontSize: 9, fontWeight: 700, padding: "3px 10px", borderRadius: 10, background: activeOnly ? P.orange : "transparent", border: "1px solid " + (activeOnly ? P.orange : P.dim), color: activeOnly ? P.navy : P.dim, cursor: "pointer", marginBottom: 8 }}>Hide No-Plays</button>
+            <Sub>{bracketInfo ? "TOURNAMENT STANDINGS" : "STANDINGS"}</Sub>
+            {!bracketInfo && (
+              <button onClick={() => setActiveOnly(v => !v)} style={{ fontSize: 9, fontWeight: 700, padding: "3px 10px", borderRadius: 10, background: activeOnly ? P.orange : "transparent", border: "1px solid " + (activeOnly ? P.orange : P.dim), color: activeOnly ? P.navy : P.dim, cursor: "pointer", marginBottom: 8 }}>Hide No-Plays</button>
+            )}
+            {bracketInfo && (() => {
+              const stillIn = Object.values(bracketInfo).filter(b => b.status === "in").length;
+              const out = Object.values(bracketInfo).filter(b => b.status === "eliminated").length;
+              return (
+                <span style={{ fontSize: 9, fontWeight: 700, padding: "3px 10px", borderRadius: 10, background: "rgba(52,211,153,.12)", border: "1px solid rgba(52,211,153,.3)", color: P.ok, marginBottom: 8 }}>
+                  {stillIn} STILL IN · {out} OUT
+                </span>
+              );
+            })()}
           </div>
           <div style={gt}>
             <div style={{ display: "flex", padding: "9px 10px", background: "rgba(0,48,82,.5)", gap: 4 }}>
-              {[["#", 22], ["Player", 0], ["Tot", 28], ["Box", 28], ["W", 22], ["L", 22]].map(([l, w]) => <span key={l + w} style={{ ...ths, width: w || undefined, flex: w ? undefined : 1 }}>{l}</span>)}
+              {bracketInfo
+                ? [["Seed", 36], ["Player", 0], ["Status", 78], ["Tot", 32]].map(([l, w]) => <span key={l + w} style={{ ...ths, width: w || undefined, flex: w ? undefined : 1 }}>{l}</span>)
+                : [["#", 22], ["Player", 0], ["Tot", 28], ["Box", 28], ["W", 22], ["L", 22]].map(([l, w]) => <span key={l + w} style={{ ...ths, width: w || undefined, flex: w ? undefined : 1 }}>{l}</span>)}
             </div>
-            {displayLad.map((s, i) => (
+            {displayLad.map((s, i) => {
+              const br = bracketInfo ? bracketInfo[s.id] : null;
+              const isChamp = br && br.status === "champion";
+              const isOut = br && br.status === "eliminated";
+              const isStillIn = br && br.status === "in";
+              return (
               <div key={s.id}>
-                <div onClick={() => setExp(exp === s.id ? null : s.id)} style={{ display: "flex", padding: "9px 10px", gap: 4, borderBottom: exp === s.id ? "none" : "1px solid rgba(21,152,203,.08)", background: i === 0 ? "rgba(241,138,0,.12)" : i % 2 === 0 ? "rgba(0,48,79,.2)" : "transparent", borderLeft: i === 0 ? "3px solid " + P.orange : "3px solid transparent", cursor: "pointer" }}>
-                  <span style={{ width: 22, fontWeight: 700, fontSize: 12, color: i === 0 ? P.orange : i < 3 ? P.blue : P.dim }}>{i === 0 ? "\ud83d\udc51" : i + 1}{i > 0 && displayLad[i-1] && displayLad[i-1].points === s.points && <span onClick={(e) => { e.stopPropagation(); setTieExplain(tieExplain === s.id ? null : s.id); }} style={{ fontSize: 8, color: P.dim, cursor: "pointer", marginLeft: 1 }}>=</span>}</span>
-                  <span style={{ flex: 1, fontWeight: i < 3 ? 600 : 400, fontSize: 12 }}><span onClick={(e) => { e.stopPropagation(); setProfileId(s.id); }} style={{ cursor: "pointer", borderBottom: "1px dashed " + P.dim }}>{s.name}</span><StreakBadge streak={s.streak} />{s.inactive && <span style={{ fontSize: 8, fontWeight: 700, color: P.bad, background: "rgba(248,113,113,.15)", border: "1px solid rgba(248,113,113,.35)", borderRadius: 4, padding: "1px 4px", marginLeft: 4, letterSpacing: .5 }}>NO PLAY</span>}{!s.inactive && s.atRisk && <span style={{ fontSize: 8, fontWeight: 700, color: P.amber, background: "rgba(255,173,51,.15)", border: "1px solid rgba(255,173,51,.35)", borderRadius: 4, padding: "1px 4px", marginLeft: 4, letterSpacing: .5 }}>AT RISK</span>}</span>
-                  <span style={{ width: 28, fontWeight: 700, color: P.orange, fontSize: 12 }}>{fmtPts(s.points)}</span>
-                  <span style={{ width: 28, color: P.amber, fontSize: 11 }}>{fmtPts(s.boxPts)}</span>
-                  <span style={{ width: 22, color: P.ok, fontSize: 11 }}>{s.wins}</span>
-                  <span style={{ width: 22, color: P.bad, fontSize: 11 }}>{s.losses}</span>
+                <div onClick={() => setExp(exp === s.id ? null : s.id)} style={{
+                  display: "flex", padding: "9px 10px", gap: 4,
+                  borderBottom: exp === s.id ? "none" : "1px solid rgba(21,152,203,.08)",
+                  background: isChamp ? "linear-gradient(90deg,rgba(241,138,0,.22),rgba(241,138,0,.04))"
+                            : isOut ? "rgba(248,113,113,.04)"
+                            : i === 0 ? "rgba(241,138,0,.12)"
+                            : i % 2 === 0 ? "rgba(0,48,79,.2)" : "transparent",
+                  borderLeft: isChamp ? "3px solid " + P.orange
+                            : isStillIn ? "3px solid " + P.ok
+                            : isOut ? "3px solid rgba(248,113,113,.35)"
+                            : i === 0 ? "3px solid " + P.orange
+                            : "3px solid transparent",
+                  cursor: "pointer",
+                  opacity: isOut ? .72 : 1,
+                }}>
+                  {bracketInfo ? (
+                    <span style={{ width: 36, fontWeight: 700, fontSize: 12, color: br.seed === 1 ? P.orange : br.seed <= 4 ? P.amber : br.seed <= 8 ? P.blue : P.dim }}>
+                      #{br.seed}
+                    </span>
+                  ) : (
+                    <span style={{ width: 22, fontWeight: 700, fontSize: 12, color: i === 0 ? P.orange : i < 3 ? P.blue : P.dim }}>{i === 0 ? "\ud83d\udc51" : i + 1}{i > 0 && displayLad[i-1] && displayLad[i-1].points === s.points && <span onClick={(e) => { e.stopPropagation(); setTieExplain(tieExplain === s.id ? null : s.id); }} style={{ fontSize: 8, color: P.dim, cursor: "pointer", marginLeft: 1 }}>=</span>}</span>
+                  )}
+                  <span style={{ flex: 1, fontWeight: isChamp ? 700 : (i < 3 ? 600 : 400), fontSize: 12 }}>
+                    <span onClick={(e) => { e.stopPropagation(); setProfileId(s.id); }} style={{ cursor: "pointer", borderBottom: "1px dashed " + P.dim, color: isChamp ? P.white : isOut ? P.grey : "inherit" }}>{s.name}</span>
+                    {!bracketInfo && <StreakBadge streak={s.streak} />}
+                    {!bracketInfo && s.inactive && <span style={{ fontSize: 8, fontWeight: 700, color: P.bad, background: "rgba(248,113,113,.15)", border: "1px solid rgba(248,113,113,.35)", borderRadius: 4, padding: "1px 4px", marginLeft: 4, letterSpacing: .5 }}>NO PLAY</span>}
+                    {!bracketInfo && !s.inactive && s.atRisk && <span style={{ fontSize: 8, fontWeight: 700, color: P.amber, background: "rgba(255,173,51,.15)", border: "1px solid rgba(255,173,51,.35)", borderRadius: 4, padding: "1px 4px", marginLeft: 4, letterSpacing: .5 }}>AT RISK</span>}
+                  </span>
+                  {bracketInfo ? (
+                    <>
+                      <span style={{ width: 78, fontSize: 9, fontWeight: 800, letterSpacing: 0.8, textAlign: "center" }}>
+                        {isChamp && <span style={{ color: P.orange, background: "rgba(241,138,0,.18)", border: "1px solid rgba(241,138,0,.45)", borderRadius: 4, padding: "2px 6px" }}>🏆 CHAMP</span>}
+                        {isStillIn && <span style={{ color: P.ok, background: "rgba(52,211,153,.15)", border: "1px solid rgba(52,211,153,.4)", borderRadius: 4, padding: "2px 6px" }}>STILL IN</span>}
+                        {isOut && <span style={{ color: P.bad, background: "rgba(248,113,113,.1)", border: "1px solid rgba(248,113,113,.3)", borderRadius: 4, padding: "2px 6px" }}>{eliminationRoundLabel(br.eliminatedInRound)}</span>}
+                      </span>
+                      <span style={{ width: 32, fontWeight: 700, color: P.orange, fontSize: 12, textAlign: "right" }}>{fmtPts(s.points)}</span>
+                    </>
+                  ) : (
+                    <>
+                      <span style={{ width: 28, fontWeight: 700, color: P.orange, fontSize: 12 }}>{fmtPts(s.points)}</span>
+                      <span style={{ width: 28, color: P.amber, fontSize: 11 }}>{fmtPts(s.boxPts)}</span>
+                      <span style={{ width: 22, color: P.ok, fontSize: 11 }}>{s.wins}</span>
+                      <span style={{ width: 22, color: P.bad, fontSize: 11 }}>{s.losses}</span>
+                    </>
+                  )}
                 </div>
                 {tieExplain === s.id && i > 0 && displayLad[i-1] && (() => { const reason = explainTie(s, displayLad[i-1]); return reason ? <div style={{ padding: "4px 10px 6px 30px", background: "rgba(21,152,203,.06)", fontSize: 10, color: P.blue, animation: "fadeIn .15s" }}>Ranked #{i+1} because: {reason}</div> : null; })()}
                 {exp === s.id && (() => {
@@ -1400,7 +1508,8 @@ function Home({ st, ladder, gn, ini, cd, requestJoin }) {
                   );
                 })()}
               </div>
-            ))}
+            );
+            })}
           </div>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 10 }}>
             {[[P.orange, "Total"], [P.amber, "Box"], [P.blue, "Open"], ["", "\ud83d\udd25 Streak"]].map(([c, t]) => <span key={t} style={{ fontSize: 9, color: P.grey, display: "flex", alignItems: "center", gap: 3 }}>{c && <span style={{ width: 6, height: 6, borderRadius: "50%", background: c }} />}{t}</span>)}
@@ -1425,13 +1534,21 @@ function Home({ st, ladder, gn, ini, cd, requestJoin }) {
       )}
 
 
-      <div style={{ textAlign: "center", padding: "20px 0 10px" }}>
-        <button onClick={() => { setShowJoinPicker(true); setJoinSearch(""); }} style={{ padding: "14px 36px", background: "linear-gradient(135deg," + P.orange + "," + P.amber + ")", border: "none", borderRadius: 14, color: P.navy, fontSize: 15, fontWeight: 700, cursor: "pointer", boxShadow: "0 4px 20px rgba(241,138,0,.3)", marginBottom: 16 }}>
-          🎱 Join the League
-        </button>
-        <div style={{ width: 40, height: 1, background: "linear-gradient(90deg,transparent," + P.orange + ",transparent)", margin: "0 auto 10px" }} />
-        <p style={{ fontSize: 12, color: P.dim, fontStyle: "italic", fontFamily: "Georgia,serif", letterSpacing: 2 }}>DRAck 'Em Up</p>
-      </div>
+      {!st.seedingPhaseEnded && (
+        <div style={{ textAlign: "center", padding: "20px 0 10px" }}>
+          <button onClick={() => { setShowJoinPicker(true); setJoinSearch(""); }} style={{ padding: "14px 36px", background: "linear-gradient(135deg," + P.orange + "," + P.amber + ")", border: "none", borderRadius: 14, color: P.navy, fontSize: 15, fontWeight: 700, cursor: "pointer", boxShadow: "0 4px 20px rgba(241,138,0,.3)", marginBottom: 16 }}>
+            🎱 Join the League
+          </button>
+          <div style={{ width: 40, height: 1, background: "linear-gradient(90deg,transparent," + P.orange + ",transparent)", margin: "0 auto 10px" }} />
+          <p style={{ fontSize: 12, color: P.dim, fontStyle: "italic", fontFamily: "Georgia,serif", letterSpacing: 2 }}>DRAck 'Em Up</p>
+        </div>
+      )}
+      {st.seedingPhaseEnded && (
+        <div style={{ textAlign: "center", padding: "16px 0 4px" }}>
+          <div style={{ width: 40, height: 1, background: "linear-gradient(90deg,transparent," + P.orange + ",transparent)", margin: "0 auto 8px" }} />
+          <p style={{ fontSize: 12, color: P.dim, fontStyle: "italic", fontFamily: "Georgia,serif", letterSpacing: 2 }}>DRAck 'Em Up</p>
+        </div>
+      )}
       {/* JOIN PICKER MODAL — pick your name from available players → goes to admin approval queue */}
       {showJoinPicker && (() => {
         const avail = [...(st.availablePlayers || [])].sort((a, b) => a.localeCompare(b));
