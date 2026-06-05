@@ -1806,12 +1806,19 @@ function BracketV({ st, gn, ladder, recordBracketMatch, isAdmin }) {
     const p1Name = gn(m.p1);
     const p2Name = gn(m.p2);
     const submit = (winnerId) => {
-      const n1 = parseInt(s1, 10), n2 = parseInt(s2, 10);
-      if (isNaN(n1) || isNaN(n2) || n1 < 0 || n2 < 0 || n1 > 3 || n2 > 3 || n1 === n2) { alert("Best of 5: scores must be 0-3 and not equal"); return; }
+      // Empty inputs read as 0 — the placeholder shows "0" so this matches
+      // what the user sees. Without this, a 3-0 win where the loser leaves
+      // their input blank gets rejected with a confusing "must be 0-3" error.
+      const raw1 = (s1 === "" || s1 == null) ? "0" : String(s1);
+      const raw2 = (s2 === "" || s2 == null) ? "0" : String(s2);
+      const n1 = parseInt(raw1, 10), n2 = parseInt(raw2, 10);
+      if (isNaN(n1) || isNaN(n2)) { alert("Please enter numbers for both scores."); return; }
+      if (n1 < 0 || n2 < 0 || n1 > 3 || n2 > 3) { alert("Best of 5: each score must be between 0 and 3."); return; }
+      if (n1 === n2) { alert("Scores can't be tied — there has to be a winner."); return; }
       const winnerScore = winnerId === m.p1 ? n1 : n2;
       const loserScore = winnerId === m.p1 ? n2 : n1;
-      if (winnerScore !== 3) { alert("Winner must have 3 racks (best of 5)"); return; }
-      if (loserScore >= winnerScore) { alert("Winner's score must be higher"); return; }
+      if (winnerScore !== 3) { alert("The winner must have 3 racks (best of 5). You entered " + winnerScore + " for the winner."); return; }
+      if (loserScore >= winnerScore) { alert("Winner's score must be higher than the loser's."); return; }
       recordBracketMatch(m.id, winnerId, n1, n2);
       setSelectedMatch(null); setS1(""); setS2("");
     };
@@ -1954,8 +1961,11 @@ function BracketV({ st, gn, ladder, recordBracketMatch, isAdmin }) {
       const isPathToFinal = ri === numRounds - 1;
       // "Lit" color depends on whether this connector feeds the Final
       const litColor = isPathToFinal ? "rgba(241,138,0,.75)" : "rgba(52,211,153,.6)";
-      // "Dim" base color depends on the same — gold-tinted near the final, blue elsewhere
-      const dimColor = isPathToFinal ? "rgba(241,138,0,.35)" : "rgba(21,152,203,.3)";
+      // "Dim" base color is UNIFORM across the whole bracket — a subtle blue.
+      // We don't tint Final-feeding lines gold until they're actually lit,
+      // otherwise the right side of the tree looks "lit" even when no
+      // semifinalists exist yet.
+      const dimColor = "rgba(21,152,203,.3)";
 
       // A stub is "lit" iff its source match has a winner (non-bye).
       const topLit = srcTopMatch.completed && !!srcTopMatch.winner;
