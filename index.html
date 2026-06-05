@@ -762,24 +762,22 @@ function App() {
   const endSeedingPhase = () => {
     autoBackup("pre-bracket-creation");
     save(cur => {
-      try {
-        if (cur.seedingPhaseEnded) { flash("Seeding already ended"); return null; }
-        // Archive any in-progress round first
-        let working = cur;
-        if ((cur.cycleNumber || 0) > 0 && (cur.boxes || []).length > 0) {
-          const bon = [];
-          const afBM = (cur.boxMatches || []).map(m => !m.completed ? { ...m, score1: 0, score2: 0, completed: true, completedAt: nw(), forfeit: true, autoForfeit: true } : m);
-          if (cur.boxes) cur.boxes.forEach((box, bi) => { const bm = afBM.filter(m => m.box === bi); const realBM = bm.filter(m => m.completed && !m.forfeit && !(m.score1 === 0 && m.score2 === 0)); if (realBM.length > 0) { const bs = boxSt(box.players, realBM); if (bs[0]) bon.push({ id: bs[0].id, pts: 3 }); if (bs[1]) bon.push({ id: bs[1].id, pts: 1 }); } });
-          const past = [...(cur.pastCycles || []), { cycle: cur.cycleNumber, boxMatches: afBM, boxes: cur.boxes || [], bonuses: [...bon], startedAt: cur.cycleStart, randomized: cur.cycleRandomized || false }];
-          working = { ...cur, pastCycles: past, boxes: [], boxMatches: [] };
-        }
-        // Compute final standings using all archived cycles
-        const finalLad = calcLad(working.players, working);
-        const eloResult = calcElo(working.players, working);
-        // Eligible bracket participants = active players who played at least 1 real match
-        const eligible = finalLad.filter(s => (s.mp || 0) > 0 && !s.inactive);
-        console.log("[endSeedingPhase] eligible:", eligible.length, "of", finalLad.length, "total players");
-        if (eligible.length < 2) { flash("Need at least 2 active players for bracket"); return null; }
+      if (cur.seedingPhaseEnded) { flash("Seeding already ended"); return null; }
+      // Archive any in-progress round first
+      let working = cur;
+      if ((cur.cycleNumber || 0) > 0 && (cur.boxes || []).length > 0) {
+        const bon = [];
+        const afBM = (cur.boxMatches || []).map(m => !m.completed ? { ...m, score1: 0, score2: 0, completed: true, completedAt: nw(), forfeit: true, autoForfeit: true } : m);
+        if (cur.boxes) cur.boxes.forEach((box, bi) => { const bm = afBM.filter(m => m.box === bi); const realBM = bm.filter(m => m.completed && !m.forfeit && !(m.score1 === 0 && m.score2 === 0)); if (realBM.length > 0) { const bs = boxSt(box.players, realBM); if (bs[0]) bon.push({ id: bs[0].id, pts: 3 }); if (bs[1]) bon.push({ id: bs[1].id, pts: 1 }); } });
+        const past = [...(cur.pastCycles || []), { cycle: cur.cycleNumber, boxMatches: afBM, boxes: cur.boxes || [], bonuses: [...bon], startedAt: cur.cycleStart, randomized: cur.cycleRandomized || false }];
+        working = { ...cur, pastCycles: past, boxes: [], boxMatches: [] };
+      }
+      // Compute final standings using all archived cycles
+      const finalLad = calcLad(working.players, working);
+      const eloResult = calcElo(working.players, working);
+      // Eligible bracket participants = active players who played at least 1 real match
+      const eligible = finalLad.filter(s => (s.mp || 0) > 0 && !s.inactive);
+      if (eligible.length < 2) { flash("Need at least 2 active players for bracket"); return null; }
       // Sort by points desc, ELO desc as tiebreaker
       const sorted = [...eligible].sort((a, b) => {
         if (b.points !== a.points) return b.points - a.points;
@@ -788,7 +786,15 @@ function App() {
       // Round up to next power of 2 for byes
       const n = sorted.length;
       const bracketSize = Math.pow(2, Math.ceil(Math.log2(n)));
-      const seeds = sorted.map((p, i) => ({ id: p.id, seed: i + 1, points: p.points, elo: eloResult.ratings[p.id] || 1000 }));
+      // Build slot objects with a consistent shape — every field defined, no
+      // undefined values (Firestore rejects undefined). Real seeds get bye=false.
+      const seeds = sorted.map((p, i) => ({
+        id: p.id,
+        seed: i + 1,
+        points: p.points == null ? 0 : p.points,
+        elo: eloResult.ratings[p.id] || 1000,
+        bye: false,
+      }));
       // Pad with BYE slots so total = bracketSize
       const slots = [...seeds];
       while (slots.length < bracketSize) slots.push({ id: null, seed: slots.length + 1, points: 0, elo: 0, bye: true });
@@ -831,7 +837,9 @@ function App() {
       const rounds = [];
       // Round 1 — auto-advance byes
       const r1Matches = r1Pairs.map((pair, idx) => {
-        const isBye = pair.top.bye || pair.bot.bye;
+        // Coerce to boolean — non-bye slots have undefined `bye`, and Firestore
+        // rejects undefined field values with "Unsupported field value: undefined".
+        const isBye = !!(pair.top.bye || pair.bot.bye);
         let winner = null, completed = false;
         if (isBye) {
           winner = pair.top.bye ? pair.bot.id : pair.top.id;
@@ -841,14 +849,14 @@ function App() {
           id: uid(),
           round: 1,
           matchIdx: idx,
-          p1: pair.top.id,
-          p1Seed: pair.top.seed,
-          p2: pair.bot.id,
-          p2Seed: pair.bot.seed,
+          p1: pair.top.id == null ? null : pair.top.id,
+          p1Seed: pair.top.seed == null ? null : pair.top.seed,
+          p2: pair.bot.id == null ? null : pair.bot.id,
+          p2Seed: pair.bot.seed == null ? null : pair.bot.seed,
           score1: null,
           score2: null,
-          winner,
-          completed,
+          winner: winner == null ? null : winner,
+          completed: !!completed,
           completedAt: completed ? nw() : null,
           isBye,
         };
@@ -894,12 +902,6 @@ function App() {
       const bracket = { size: bracketSize, numRounds, seeds, rounds, createdAt: nw() };
       flash("Seeding phase ended — bracket unlocked!");
       return withLog({ ...working, seedingPhaseEnded: true, bracket, checkedIn: [] }, "SEEDING_ENDED", `Bracket created with ${sorted.length} players (size ${bracketSize})`);
-      } catch (innerErr) {
-        // Log the actual error from inside the mutator so we can diagnose what
-        // went wrong (calcLad, boxSt, bracket construction, etc.).
-        console.error("[endSeedingPhase] mutator threw:", innerErr);
-        throw innerErr;
-      }
     }, "Couldn't end seeding phase");
   };
 
