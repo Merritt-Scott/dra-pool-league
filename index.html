@@ -1928,27 +1928,51 @@ function BracketV({ st, gn, ladder, recordBracketMatch, isAdmin }) {
   };
 
   // ─── CONNECTOR LINES (SVG) ───
+  // Each match in round r > 0 has two source matches in round r-1. The
+  // connector consists of four segments:
+  //   • top stub:  horizontal from src-top's right edge to the vertical join
+  //   • bot stub:  horizontal from src-bot's right edge to the vertical join
+  //   • vertical:  joins the two stubs
+  //   • arrival:   horizontal from the join to the dest match's left edge
+  // Each segment is colored INDEPENDENTLY: green/gold when "lit up" (a winner
+  // has flowed through it), dim otherwise. A stub lights up when its source
+  // match has a winner. The vertical and arrival light up only when BOTH
+  // sources are complete (both winners have flowed in and the dest is ready).
   const connectors = [];
   br.rounds.forEach((round, ri) => {
     if (ri === 0) return;
     round.matches.forEach((m, mi) => {
       const dest = matchPositions[m.id];
-      const srcTop = matchPositions[br.rounds[ri - 1].matches[mi * 2].id];
-      const srcBot = matchPositions[br.rounds[ri - 1].matches[mi * 2 + 1].id];
+      const srcTopMatch = br.rounds[ri - 1].matches[mi * 2];
+      const srcBotMatch = br.rounds[ri - 1].matches[mi * 2 + 1];
+      const srcTop = matchPositions[srcTopMatch.id];
+      const srcBot = matchPositions[srcBotMatch.id];
       const x1 = srcTop.x + COL_W;
       const x2 = dest.x;
       const midX = x1 + (x2 - x1) / 2;
+
       const isPathToFinal = ri === numRounds - 1;
-      const color = isPathToFinal ? "rgba(241,138,0,.4)" : "rgba(21,152,203,.3)";
-      const sourceCompleted = br.rounds[ri - 1].matches[mi * 2].completed || br.rounds[ri - 1].matches[mi * 2 + 1].completed;
-      const stroke = sourceCompleted ? (isPathToFinal ? "rgba(241,138,0,.7)" : "rgba(52,211,153,.55)") : color;
-      const strokeWidth = sourceCompleted ? 1.5 : 1;
+      // "Lit" color depends on whether this connector feeds the Final
+      const litColor = isPathToFinal ? "rgba(241,138,0,.75)" : "rgba(52,211,153,.6)";
+      // "Dim" base color depends on the same — gold-tinted near the final, blue elsewhere
+      const dimColor = isPathToFinal ? "rgba(241,138,0,.35)" : "rgba(21,152,203,.3)";
+
+      // A stub is "lit" iff its source match has a winner (non-bye).
+      const topLit = srcTopMatch.completed && !!srcTopMatch.winner;
+      const botLit = srcBotMatch.completed && !!srcBotMatch.winner;
+      // Vertical join + arrival light up only when BOTH sides have winners
+      // (the dest match is ready or being played).
+      const bothLit = topLit && botLit;
+
+      const seg = (lit) => lit ? litColor : dimColor;
+      const w   = (lit) => lit ? 1.6 : 1;
+
       connectors.push(
         <g key={m.id + "-conn"}>
-          <line x1={x1} y1={srcTop.yCenter} x2={midX} y2={srcTop.yCenter} stroke={stroke} strokeWidth={strokeWidth} />
-          <line x1={x1} y1={srcBot.yCenter} x2={midX} y2={srcBot.yCenter} stroke={stroke} strokeWidth={strokeWidth} />
-          <line x1={midX} y1={srcTop.yCenter} x2={midX} y2={srcBot.yCenter} stroke={stroke} strokeWidth={strokeWidth} />
-          <line x1={midX} y1={dest.yCenter} x2={x2} y2={dest.yCenter} stroke={stroke} strokeWidth={strokeWidth} />
+          <line x1={x1} y1={srcTop.yCenter} x2={midX} y2={srcTop.yCenter} stroke={seg(topLit)} strokeWidth={w(topLit)} />
+          <line x1={x1} y1={srcBot.yCenter} x2={midX} y2={srcBot.yCenter} stroke={seg(botLit)} strokeWidth={w(botLit)} />
+          <line x1={midX} y1={srcTop.yCenter} x2={midX} y2={srcBot.yCenter} stroke={seg(bothLit)} strokeWidth={w(bothLit)} />
+          <line x1={midX} y1={dest.yCenter} x2={x2} y2={dest.yCenter} stroke={seg(bothLit)} strokeWidth={w(bothLit)} />
         </g>
       );
     });
@@ -1990,10 +2014,12 @@ function BracketV({ st, gn, ladder, recordBracketMatch, isAdmin }) {
           50% { filter: drop-shadow(0 0 18px rgba(255,173,51,.7)); }
         }
       `}</style>
-      <Tt>Tournament Bracket</Tt>
-      <p style={{ fontSize: 12, color: P.grey, marginBottom: 16, padding: "0 16px" }}>
-        Single elimination · Best of 5 · {br.size}-player bracket
-      </p>
+      <div style={{ textAlign: "center", marginBottom: 14 }}>
+        <h3 style={{ fontSize: 22, fontWeight: 400, color: P.white, marginBottom: 6, fontFamily: "Georgia,serif", letterSpacing: 3 }}>Tournament Bracket</h3>
+        <p style={{ fontSize: 12, color: P.grey, letterSpacing: 1 }}>
+          Single elimination · Best of 5 · {br.size}-player bracket
+        </p>
+      </div>
 
       {champ && (
         <div style={{
