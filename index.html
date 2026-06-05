@@ -1041,7 +1041,7 @@ function App() {
           <p style={{ fontSize: 11, color: P.dim }}>Tap anywhere to close</p>
         </div>
       )}
-      <main style={{ maxWidth: 600, margin: "0 auto", padding: "0 14px 110px", animation: "fadeIn .3s", position: "relative", zIndex: 1 }}>
+      <main style={{ maxWidth: 600, margin: "0 auto", padding: "0 14px 130px", animation: "fadeIn .3s", position: "relative", zIndex: 1 }}>
         {view === "home" && <Home st={st} ladder={activeLad} gn={gn} ini={ini} cd={cd} requestJoin={requestJoin} />}
         {view === "boxes" && <BoxesV st={st} gn={gn} ini={ini} logR={logR} ffM={ffM} />}
         {view === "matches" && <MatchesV st={st} gn={gn} logR={logR} ffM={ffM} />}
@@ -1051,17 +1051,17 @@ function App() {
         {view === "admin" && <AdminV st={st} ladder={ladder} previewCyc={previewCyc} confirmCyc={confirmCyc} completeCyc={completeCyc} endEarlyCyc={endEarlyCyc} undoCyc={undoCyc} resetAll={resetAll} addP={addP} rmP={rmP} ffM={ffM} gn={gn} save={save} togCI={togCI} approvePlayer={approvePlayer} rejectPlayer={rejectPlayer} endSeedingPhase={endSeedingPhase} undoBracket={undoBracket} backupNow={backupNow} />}
       </main>
       <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 10, padding: "0 14px", paddingBottom: "max(10px, env(safe-area-inset-bottom))" }}>
-        <nav style={{ display: "flex", justifyContent: "space-around", alignItems: "center", padding: "6px 4px", background: "rgba(255,255,255,.08)", backdropFilter: "blur(40px) saturate(200%)", WebkitBackdropFilter: "blur(40px) saturate(200%)", borderRadius: 28, border: "1px solid rgba(255,255,255,.18)", borderTop: "1px solid rgba(255,255,255,.28)", boxShadow: "0 8px 40px rgba(0,0,0,.4), inset 0 1px 0 rgba(255,255,255,.18)", position: "relative", marginBottom: 8, overflow: "hidden" }}>
-          <div style={{ position: "absolute", left: `calc(${navIdx} * (100% / 6) + 3px)`, width: "calc(100% / 6 - 6px)", top: 4, bottom: 4, borderRadius: 22, background: "rgba(255,255,255,.13)", border: "1px solid rgba(255,255,255,.22)", boxShadow: "inset 0 1px 0 rgba(255,255,255,.3)", transition: "left .28s cubic-bezier(.34,1.56,.64,1)", pointerEvents: "none" }} />
+        <nav style={{ display: "flex", justifyContent: "space-around", alignItems: "center", padding: "9px 6px", background: "rgba(255,255,255,.08)", backdropFilter: "blur(40px) saturate(200%)", WebkitBackdropFilter: "blur(40px) saturate(200%)", borderRadius: 32, border: "1px solid rgba(255,255,255,.18)", borderTop: "1px solid rgba(255,255,255,.28)", boxShadow: "0 8px 40px rgba(0,0,0,.4), inset 0 1px 0 rgba(255,255,255,.18)", position: "relative", marginBottom: 8, overflow: "hidden" }}>
+          <div style={{ position: "absolute", left: `calc(${navIdx} * (100% / 6) + 4px)`, width: "calc(100% / 6 - 8px)", top: 5, bottom: 5, borderRadius: 26, background: "rgba(255,255,255,.13)", border: "1px solid rgba(255,255,255,.22)", boxShadow: "inset 0 1px 0 rgba(255,255,255,.3)", transition: "left .28s cubic-bezier(.34,1.56,.64,1)", pointerEvents: "none" }} />
           {tabs.map(([v, ic], i) => {
             const label = v === "checkin" ? "Players" : v === "rules" ? "Rules" : v;
             const isActive = view === v;
             const isTapped = tappedTab === i;
             return (
-              <button key={v} onClick={() => { setView(v); setNavIdx(i); setTappedTab(i); setTimeout(() => setTappedTab(null), 420); }} style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "6px 4px 5px", background: "none", border: "none", cursor: "pointer", position: "relative", flex: 1, minHeight: 52 }}>
-                {isTapped && <span style={{ position: "absolute", top: "50%", left: "50%", width: 36, height: 36, borderRadius: "50%", background: "radial-gradient(circle, rgba(241,138,0,.5) 0%, transparent 70%)", animation: "glowBurst .42s ease-out forwards", pointerEvents: "none" }} />}
-                <span style={{ fontSize: isActive ? 22 : 19, lineHeight: 1, animation: isTapped ? "navBounce .42s cubic-bezier(.34,1.56,.64,1)" : "none", display: "block" }}>{ic}</span>
-                <span style={{ fontSize: 8, fontWeight: 700, letterSpacing: .8, textTransform: "uppercase", color: isActive ? P.orange : P.dim, opacity: isActive ? 1 : .65, marginTop: 2 }}>{label}</span>
+              <button key={v} onClick={() => { setView(v); setNavIdx(i); setTappedTab(i); setTimeout(() => setTappedTab(null), 420); }} style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "8px 6px 7px", background: "none", border: "none", cursor: "pointer", position: "relative", flex: 1, minHeight: 64 }}>
+                {isTapped && <span style={{ position: "absolute", top: "50%", left: "50%", width: 44, height: 44, borderRadius: "50%", background: "radial-gradient(circle, rgba(241,138,0,.5) 0%, transparent 70%)", animation: "glowBurst .42s ease-out forwards", pointerEvents: "none" }} />}
+                <span style={{ fontSize: isActive ? 26 : 22, lineHeight: 1, animation: isTapped ? "navBounce .42s cubic-bezier(.34,1.56,.64,1)" : "none", display: "block" }}>{ic}</span>
+                <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", color: isActive ? P.orange : P.dim, opacity: isActive ? 1 : .65, marginTop: 4 }}>{label}</span>
               </button>
             );
           })}
@@ -1641,23 +1641,23 @@ function BracketV({ st, gn, ladder, recordBracketMatch, isAdmin }) {
   const champ = st.champion;
   const numRounds = br.rounds.length;
 
-  // ─── BRACKET TREE LAYOUT CONSTANTS ───
-  // The tree is laid out as columns (one per round). Each match's vertical
-  // position is determined by its index; matches in later rounds sit at the
-  // midpoint of the two source matches they descend from.
-  const MATCH_H = 64;        // visual height of one match card
-  const MATCH_GAP = 18;      // gap between two matches in Round 1
-  const COL_W = 178;         // width of each round column
-  const COL_GAP = 38;        // horizontal gap between columns (for connector lines)
-  const SLOT = MATCH_H + MATCH_GAP; // base vertical slot in Round 1
+  // ─── ADAPTIVE LAYOUT CONSTANTS ───
+  // Tighten the layout for larger brackets so they fit better. A 32-player
+  // bracket has 16 R1 matches stacked vertically — at full size it'd be
+  // ~1300px tall and ~1000px wide, which is unwieldy. Scale down accordingly.
+  const isLarge = br.size >= 16;
+  const isXLarge = br.size >= 32;
+  const MATCH_H = isXLarge ? 48 : isLarge ? 56 : 64;
+  const MATCH_GAP = isXLarge ? 10 : isLarge ? 14 : 18;
+  const COL_W = isXLarge ? 158 : isLarge ? 168 : 178;
+  const COL_GAP = isXLarge ? 28 : isLarge ? 32 : 38;
+  const SLOT = MATCH_H + MATCH_GAP;
   const r1Count = br.rounds[0].matches.length;
   const treeHeight = r1Count * SLOT;
   const treeWidth = numRounds * COL_W + (numRounds - 1) * COL_GAP;
 
   // Compute (x, y, height) for every match across all rounds.
-  // Round r has matchesInRound = r1Count / 2^r matches.
-  // Each match in round r covers 2^r Round-1 slots, centered on those slots.
-  const matchPositions = {}; // matchId -> { x, yCenter, top, height }
+  const matchPositions = {};
   br.rounds.forEach((round, ri) => {
     const slotsPerMatch = Math.pow(2, ri);
     round.matches.forEach((m, mi) => {
@@ -1719,7 +1719,7 @@ function BracketV({ st, gn, ladder, recordBracketMatch, isAdmin }) {
     );
   })();
 
-  // ─── MATCH CARD (used inside the tree) ───
+  // ─── MATCH CARD ───
   const renderMatchCard = (m, isFinalMatch) => {
     const p1Name = m.p1 ? gn(m.p1) : (m.isBye ? "BYE" : "TBD");
     const p2Name = m.p2 ? gn(m.p2) : (m.isBye ? "BYE" : "TBD");
@@ -1727,29 +1727,27 @@ function BracketV({ st, gn, ladder, recordBracketMatch, isAdmin }) {
     const w = m.winner;
     const p1Won = w && w === m.p1;
     const p2Won = w && w === m.p2;
-
-    // Visual treatment changes for the final
-    const accent = isFinalMatch ? P.orange : P.blue;
     const accentDim = isFinalMatch ? "rgba(241,138,0,.25)" : "rgba(21,152,203,.25)";
+    const nameSize = isXLarge ? 10.5 : isLarge ? 11 : 11.5;
+    const rowPadV = isXLarge ? 5 : 7;
 
     const playerRow = (name, seed, isWinner, isLoser, score, isWaiting) => (
       <div style={{
         display: "flex", alignItems: "center", gap: 6,
-        padding: "8px 10px",
+        padding: `${rowPadV}px 8px`,
         background: isWinner ? (isFinalMatch ? "linear-gradient(90deg,rgba(241,138,0,.18),rgba(241,138,0,.04))" : "linear-gradient(90deg,rgba(52,211,153,.14),rgba(52,211,153,.02))") : "transparent",
         borderLeft: isWinner ? "3px solid " + (isFinalMatch ? P.orange : P.ok) : "3px solid transparent",
         opacity: isLoser ? .42 : 1,
-        position: "relative",
       }}>
         <span style={{
-          fontSize: 8, fontWeight: 800, letterSpacing: 0.5, minWidth: 18,
+          fontSize: 8, fontWeight: 800, letterSpacing: 0.5, minWidth: 16,
           textAlign: "center", padding: "1px 4px", borderRadius: 3,
           background: seed ? "rgba(255,255,255,.06)" : "transparent",
           color: seed ? P.dim : "transparent",
           border: seed ? "1px solid rgba(255,255,255,.08)" : "1px solid transparent",
         }}>{seed ? seed : "—"}</span>
         <span style={{
-          flex: 1, fontSize: 11.5,
+          flex: 1, fontSize: nameSize,
           fontWeight: isWinner ? 700 : 500,
           color: isWaiting ? P.dim : (isWinner ? P.white : P.off),
           fontStyle: isWaiting ? "italic" : "normal",
@@ -1757,7 +1755,7 @@ function BracketV({ st, gn, ladder, recordBracketMatch, isAdmin }) {
         }}>{name}</span>
         {(score !== null && score !== undefined) && (
           <span style={{
-            fontSize: 13, fontWeight: 800,
+            fontSize: isXLarge ? 12 : 13, fontWeight: 800,
             color: isWinner ? (isFinalMatch ? P.orange : P.ok) : P.dim,
             minWidth: 14, textAlign: "right",
             fontFamily: "Georgia,serif",
@@ -1794,58 +1792,64 @@ function BracketV({ st, gn, ladder, recordBracketMatch, isAdmin }) {
         <div style={{ height: 1, background: "rgba(255,255,255,.06)" }} />
         {playerRow(p2Name, m.p2Seed, m.completed && p2Won, m.completed && !p2Won && !m.isBye, m.score2, !m.p2 && !m.isBye)}
         {canRecord && (
-          <div style={{ position: "absolute", top: 4, right: 6, fontSize: 7, fontWeight: 800, color: P.orange, letterSpacing: 1, background: "rgba(241,138,0,.12)", padding: "1px 5px", borderRadius: 3, border: "1px solid rgba(241,138,0,.3)" }}>TAP</div>
+          <div style={{ position: "absolute", top: 3, right: 5, fontSize: 7, fontWeight: 800, color: P.orange, letterSpacing: 1, background: "rgba(241,138,0,.12)", padding: "1px 5px", borderRadius: 3, border: "1px solid rgba(241,138,0,.3)" }}>TAP</div>
         )}
         {m.isBye && (
-          <div style={{ position: "absolute", top: 4, right: 6, fontSize: 7, fontWeight: 800, color: P.dim, letterSpacing: 1, background: "rgba(255,255,255,.04)", padding: "1px 5px", borderRadius: 3, border: "1px solid rgba(255,255,255,.06)" }}>BYE</div>
+          <div style={{ position: "absolute", top: 3, right: 5, fontSize: 7, fontWeight: 800, color: P.dim, letterSpacing: 1, background: "rgba(255,255,255,.04)", padding: "1px 5px", borderRadius: 3, border: "1px solid rgba(255,255,255,.06)" }}>BYE</div>
         )}
       </div>
     );
   };
 
   // ─── CONNECTOR LINES (SVG) ───
-  // Each match in round r > 0 connects back to two source matches in round r-1.
-  // Sources are at positions (r-1, 2*mi) and (r-1, 2*mi+1).
   const connectors = [];
   br.rounds.forEach((round, ri) => {
-    if (ri === 0) return; // round 1 has no incoming connectors
+    if (ri === 0) return;
     round.matches.forEach((m, mi) => {
       const dest = matchPositions[m.id];
       const srcTop = matchPositions[br.rounds[ri - 1].matches[mi * 2].id];
       const srcBot = matchPositions[br.rounds[ri - 1].matches[mi * 2 + 1].id];
-      // Right edge of source = COL_W from src.x. Left edge of dest = dest.x.
       const x1 = srcTop.x + COL_W;
       const x2 = dest.x;
       const midX = x1 + (x2 - x1) / 2;
-      // Choose color: gold if this dest match is the final, blue otherwise.
       const isPathToFinal = ri === numRounds - 1;
       const color = isPathToFinal ? "rgba(241,138,0,.4)" : "rgba(21,152,203,.3)";
-      // Highlight if a source match completed (i.e., the winner has flowed through)
       const sourceCompleted = br.rounds[ri - 1].matches[mi * 2].completed || br.rounds[ri - 1].matches[mi * 2 + 1].completed;
       const stroke = sourceCompleted ? (isPathToFinal ? "rgba(241,138,0,.7)" : "rgba(52,211,153,.55)") : color;
       const strokeWidth = sourceCompleted ? 1.5 : 1;
       connectors.push(
         <g key={m.id + "-conn"}>
-          {/* Horizontal stub from src top */}
           <line x1={x1} y1={srcTop.yCenter} x2={midX} y2={srcTop.yCenter} stroke={stroke} strokeWidth={strokeWidth} />
-          {/* Horizontal stub from src bot */}
           <line x1={x1} y1={srcBot.yCenter} x2={midX} y2={srcBot.yCenter} stroke={stroke} strokeWidth={strokeWidth} />
-          {/* Vertical join */}
           <line x1={midX} y1={srcTop.yCenter} x2={midX} y2={srcBot.yCenter} stroke={stroke} strokeWidth={strokeWidth} />
-          {/* Horizontal arrival at dest center */}
           <line x1={midX} y1={dest.yCenter} x2={x2} y2={dest.yCenter} stroke={stroke} strokeWidth={strokeWidth} />
         </g>
       );
     });
   });
 
-  // Round labels (column headers, sticky at top of scroll)
   const roundLabel = (ri) => {
     if (ri === numRounds - 1) return "FINAL";
     if (ri === numRounds - 2) return "SEMIFINAL";
     if (ri === numRounds - 3) return "QUARTERFINAL";
     if (ri === numRounds - 4) return "ROUND OF 16";
     return "ROUND " + (ri + 1);
+  };
+
+  // The bracket is wider than the app's normal 600px content column. Break
+  // out of that constraint by using viewport-width with a negative left margin.
+  // On narrow screens this becomes a no-op (the bracket scrolls horizontally
+  // within the visible area).
+  const breakoutStyle = {
+    position: "relative",
+    left: "50%",
+    right: "50%",
+    marginLeft: "-50vw",
+    marginRight: "-50vw",
+    width: "100vw",
+    maxWidth: "100vw",
+    padding: "0 14px",
+    boxSizing: "border-box",
   };
 
   return (
@@ -1865,15 +1869,12 @@ function BracketV({ st, gn, ladder, recordBracketMatch, isAdmin }) {
         Single elimination · Best of 5 · {br.size}-player bracket
       </p>
 
-      {/* Champion banner */}
       {champ && (
         <div style={{
           ...gc, textAlign: "center", padding: "24px 20px", marginBottom: 18,
           background: "radial-gradient(circle at 50% 0%, rgba(241,138,0,.28), rgba(255,173,51,.06) 60%, transparent), linear-gradient(180deg, rgba(0,28,52,.6), rgba(0,18,38,.9))",
           border: "2px solid " + P.orange,
           boxShadow: "0 0 40px rgba(241,138,0,.25), inset 0 1px 0 rgba(255,173,51,.2)",
-          position: "relative",
-          overflow: "hidden",
         }}>
           <div style={{ fontSize: 44, marginBottom: 6, animation: "trophyShine 2.5s ease-in-out infinite" }}>🏆</div>
           <div style={{ fontSize: 10, color: P.amber, letterSpacing: 5, fontWeight: 800, marginBottom: 6 }}>CHAMPION</div>
@@ -1883,56 +1884,53 @@ function BracketV({ st, gn, ladder, recordBracketMatch, isAdmin }) {
         </div>
       )}
 
-      {/* The bracket tree — horizontally scrollable on small screens */}
-      <div style={{
-        ...gc,
-        padding: "0 0 18px",
-        overflowX: "auto",
-        WebkitOverflowScrolling: "touch",
-        background: "linear-gradient(180deg, rgba(0,18,38,.4), rgba(0,12,28,.6))",
-      }}>
-        {/* Round labels row (sticky-ish header) */}
-        <div style={{ display: "flex", padding: "14px 0 12px", borderBottom: "1px solid " + P.gb, minWidth: treeWidth + 32, marginBottom: 8 }}>
-          {br.rounds.map((round, ri) => {
-            const done = round.matches.filter(m => m.completed).length;
-            const total = round.matches.length;
-            const isFinal = ri === numRounds - 1;
-            return (
-              <div key={ri} style={{ width: COL_W, marginLeft: ri === 0 ? 16 : COL_GAP, textAlign: "center" }}>
-                <div style={{
-                  fontSize: 10, fontWeight: 800,
-                  color: isFinal ? P.orange : P.blue,
-                  letterSpacing: 2.5,
-                  marginBottom: 3,
-                  textShadow: isFinal ? "0 0 12px rgba(241,138,0,.4)" : "none",
-                }}>{roundLabel(ri)}</div>
-                <div style={{ fontSize: 9, color: P.dim, fontWeight: 600 }}>{done}/{total}</div>
-              </div>
-            );
-          })}
+      {/* Breakout container — escapes the 600px main column */}
+      <div style={breakoutStyle}>
+        <div style={{
+          ...gc,
+          padding: "0 0 18px",
+          overflowX: "auto",
+          WebkitOverflowScrolling: "touch",
+          background: "linear-gradient(180deg, rgba(0,18,38,.4), rgba(0,12,28,.6))",
+        }}>
+          {/* Round labels row */}
+          <div style={{ display: "flex", padding: "14px 0 12px", borderBottom: "1px solid " + P.gb, minWidth: treeWidth + 32, marginBottom: 8 }}>
+            {br.rounds.map((round, ri) => {
+              const done = round.matches.filter(m => m.completed).length;
+              const total = round.matches.length;
+              const isFinal = ri === numRounds - 1;
+              return (
+                <div key={ri} style={{ width: COL_W, marginLeft: ri === 0 ? 16 : COL_GAP, textAlign: "center" }}>
+                  <div style={{
+                    fontSize: 10, fontWeight: 800,
+                    color: isFinal ? P.orange : P.blue,
+                    letterSpacing: 2.5,
+                    marginBottom: 3,
+                    textShadow: isFinal ? "0 0 12px rgba(241,138,0,.4)" : "none",
+                  }}>{roundLabel(ri)}</div>
+                  <div style={{ fontSize: 9, color: P.dim, fontWeight: 600 }}>{done}/{total}</div>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* The tree itself */}
+          <div style={{ position: "relative", width: treeWidth + 32, height: treeHeight, marginLeft: 16, marginTop: 4 }}>
+            <svg
+              width={treeWidth}
+              height={treeHeight}
+              style={{ position: "absolute", inset: 0, pointerEvents: "none", overflow: "visible" }}
+            >
+              {connectors}
+            </svg>
+            {br.rounds.flatMap((round, ri) => round.matches.map(m => renderMatchCard(m, ri === numRounds - 1)))}
+          </div>
         </div>
 
-        {/* The actual tree */}
-        <div style={{ position: "relative", width: treeWidth + 32, height: treeHeight, marginLeft: 16, marginTop: 4 }}>
-          {/* SVG connector layer (behind cards) */}
-          <svg
-            width={treeWidth}
-            height={treeHeight}
-            style={{ position: "absolute", inset: 0, pointerEvents: "none", overflow: "visible" }}
-          >
-            {connectors}
-          </svg>
-          {/* Match cards (absolute positioned) */}
-          {br.rounds.flatMap((round, ri) => round.matches.map(m => renderMatchCard(m, ri === numRounds - 1)))}
-        </div>
-      </div>
-
-      {/* Scroll hint for mobile */}
-      {treeWidth > 360 && (
-        <p style={{ fontSize: 10, color: P.dim, textAlign: "center", marginTop: 8, letterSpacing: 1 }}>
-          ← Swipe to explore the bracket →
+        <p style={{ fontSize: 10, color: P.dim, textAlign: "center", marginTop: 10, letterSpacing: 1 }}>
+          ← Swipe horizontally to explore the bracket →
         </p>
-      )}
+      </div>
 
       {matchModal}
     </div>
