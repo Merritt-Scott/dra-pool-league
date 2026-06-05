@@ -33,12 +33,38 @@ const nw = () => new Date().toISOString();
 const dd = (a, b) => Math.abs(new Date(a) - new Date(b)) / 864e5;
 function shuf(a) { const b=[...a]; for(let i=b.length-1;i>0;i--){const j=0|Math.random()*(i+1);[b[i],b[j]]=[b[j],b[i]];} return b; }
 
-function buildBoxes(ids, lad, randomize = false) {
-  let rk = lad.filter(s => ids.includes(s.id)); if (randomize) rk = shuf(rk); const bx = []; let i = 0;
-  while (i < rk.length) { const rem = rk.length - i;
-    if (rem <= 6) { bx.push({ name: "Swing Box", isSwing: true, players: rk.slice(i).map(s => s.id) }); break; }
-    bx.push({ name: "Box " + (bx.length + 1), isSwing: false, players: rk.slice(i, i + 4).map(s => s.id) }); i += 4; }
-  if (bx.length && !bx[bx.length - 1].isSwing) { bx[bx.length - 1].isSwing = true; bx[bx.length - 1].name = "Swing Box"; }
+// Build randomly-shuffled boxes from a list of checked-in player IDs.
+// `lad` is the ladder; we use it only to filter to checked-in IDs. The order
+// is then shuffled — group assignment carries NO information from previous
+// rounds (no promotion/relegation, no ELO seeding). Every round is a fresh draw.
+//
+// Sizing:
+//   - N divisible by 4 → all boxes of 4
+//   - N not divisible by 4 → one box has 3, 5, or 6 players; the rest have 4
+// All boxes are labeled "Box 1", "Box 2", ... — no "Swing Box" name.
+// The `isSwing` flag is preserved on the last box for downstream code that
+// inspects it, but it no longer affects display.
+function buildBoxes(ids, lad, randomize = true) {
+  // `randomize` arg kept for back-compat with old call sites; defaults to true
+  // since random is now the only supported mode.
+  let rk = lad.filter(s => ids.includes(s.id));
+  rk = shuf(rk);
+  const bx = [];
+  let i = 0;
+  while (i < rk.length) {
+    const rem = rk.length - i;
+    if (rem <= 6) {
+      // Last group — takes whatever's left (3, 5, or 6 if not divisible by 4; else 4)
+      bx.push({ name: "Box " + (bx.length + 1), isSwing: true, players: rk.slice(i).map(s => s.id) });
+      break;
+    }
+    bx.push({ name: "Box " + (bx.length + 1), isSwing: false, players: rk.slice(i, i + 4).map(s => s.id) });
+    i += 4;
+  }
+  // Mark the last box as the "swing" position even if it happens to have 4
+  if (bx.length && !bx[bx.length - 1].isSwing) {
+    bx[bx.length - 1].isSwing = true;
+  }
   return bx;
 }
 function genBM(boxes) { const m = []; boxes.forEach((b, bi) => { for (let i = 0; i < b.players.length; i++) for (let j = i + 1; j < b.players.length; j++) m.push({ id: uid(), type: "box", box: bi, boxName: b.name, player1: b.players[i], player2: b.players[j], score1: null, score2: null, completed: false, completedAt: null }); }); return m; }
@@ -367,79 +393,31 @@ function App() {
     return st.pastCycles;
   };
   // Compute seeded boxes for admin preview — does NOT write to Firestore
-  const previewCyc = (randomize = false) => {
+  // Generate suggested boxes via random shuffle. Admin sees this as a preview
+  // and can drag players around to adjust before confirming. The `randomize`
+  // argument is preserved for back-compat with existing callers but no longer
+  // affects behavior — every round is randomized.
+  const previewCyc = (randomize = true) => {
     if (st.checkedIn.length < 4) { flash("Need 4+"); return null; }
     if (st.cycleNumber > 0 && (st.boxes || []).length > 0) { flash("Round already in progress"); return null; }
     const past = buildArchive();
     const nl = calcLad(st.players, { ...st, pastCycles: past, boxMatches: [], boxes: [] });
-    const lastSeeded = [...past].reverse().find(c => !c.randomized);
-    let adjustedNl = nl;
-    const adj = {};
-    let eloResult = null; let eloFrac = {};
-    if (!randomize && lastSeeded) {
-      const numBoxes = lastSeeded.boxes.length;
-      lastSeeded.boxes.forEach((box, bi) => {
-        const bm = (lastSeeded.boxMatches || []).filter(m => m.box === bi);
-        // Only real (non-forfeit, non-zero) matches count; threshold scales with box size
-        const realMatches = bm.filter(m => m.completed && !m.forfeit && !(m.score1 === 0 && m.score2 === 0));
-        const threshold = Math.ceil(box.players.length / 2);
-        if (realMatches.length < threshold) return;
-        const standing = boxSt(box.players, realMatches);
-        if (!standing.length) return;
-        if (bi > 0 && standing[0]) adj[standing[0].id] = -4;
-        if (bi < numBoxes - 1 && standing[standing.length - 1]) adj[standing[standing.length - 1].id] = +4;
-      });
-      // Build last round's seed position map — the base for movement guarantees exactly ±1 box
-      const lastSeedPos = {}; let _pos = 0;
-      lastSeeded.boxes.forEach(box => { box.players.forEach(pid => { lastSeedPos[pid] = _pos++; }); });
-      // ELO as fractional tiebreaker [0, 0.99] — never independently crosses a box boundary
-      const ELO_MIN = 3;
-      eloResult = calcElo(st.players, { ...st, pastCycles: past, boxMatches: [] });
-      const qualIds = st.checkedIn.filter(id => lastSeedPos[id] !== undefined && (eloResult.played[id] || 0) >= ELO_MIN);
-      const qualRatings = qualIds.map(id => eloResult.ratings[id] || 1000);
-      const eloMin = qualRatings.length > 1 ? Math.min(...qualRatings) : 1000;
-      const eloMax = qualRatings.length > 1 ? Math.max(...qualRatings) : 1000;
-      const eloRange = eloMax - eloMin;
-      st.checkedIn.forEach(id => {
-        if (lastSeedPos[id] === undefined || (eloResult.played[id] || 0) < ELO_MIN || eloRange === 0) { eloFrac[id] = 0; return; }
-        const norm = ((eloResult.ratings[id] || 1000) - eloMin) / eloRange; // 1.0 = highest ELO
-        eloFrac[id] = (1 - norm) * 0.99; // 0.0 = best ELO seed, 0.99 = worst
-      });
-      adjustedNl = nl
-        .map((p, i) => ({
-          ...p,
-          _seed: lastSeedPos[p.id] !== undefined
-            ? lastSeedPos[p.id] + (adj[p.id] || 0) + (eloFrac[p.id] || 0)
-            : 9999 + i // Absent/new players go to Swing Box
-        }))
-        .sort((a, b) => a._seed - b._seed);
-    }
-    // Build per-player seeding reason for admin preview UI
+    // Compute ELO for display in admin preview (not used for placement)
+    const eloResult = calcElo(st.players, { ...st, pastCycles: past, boxMatches: [] });
+    // Build per-player reason badges: new vs returning (based on any past box match)
     const playerReasons = {};
-    if (!randomize && lastSeeded) {
-      const checkedInSet = new Set(st.checkedIn);
-      lastSeeded.boxes.forEach((box, bi) => {
-        const bm = (lastSeeded.boxMatches || []).filter(m => m.box === bi);
-        const realBM = bm.filter(m => m.completed && !m.forfeit && !(m.score1 === 0 && m.score2 === 0));
-        const standing = realBM.length ? boxSt(box.players, realBM) : null;
-        box.players.forEach(pid => {
-          if (!checkedInSet.has(pid)) return;
-          const stEntry = standing ? standing.find(s => s.id === pid) : null;
-          const adjVal = adj[pid] || 0;
-          playerReasons[pid] = {
-            fromBox: bi + 1,
-            reason: adjVal < 0 ? "promoted" : adjVal > 0 ? "relegated" : "held",
-            lastRecord: stEntry ? stEntry.w + "W " + stEntry.l + "L" : null,
-          };
-        });
-      });
-      st.checkedIn.forEach(pid => {
-        if (playerReasons[pid]) return;
-        const everPlayed = past.some(c => (c.boxMatches || []).some(m => m.player1 === pid || m.player2 === pid));
-        playerReasons[pid] = { reason: everPlayed ? "returning" : "new", fromBox: null, lastRecord: null };
-      });
-    }
-    return { randomize, suggestedBoxes: buildBoxes(st.checkedIn, adjustedNl, randomize), playerReasons, eloRatings: eloResult ? eloResult.ratings : {}, eloPlayed: eloResult ? eloResult.played : {}, eloFrac };
+    st.checkedIn.forEach(pid => {
+      const everPlayed = past.some(c => (c.boxMatches || []).some(m => m.player1 === pid || m.player2 === pid));
+      playerReasons[pid] = { reason: everPlayed ? "returning" : "new", fromBox: null, lastRecord: null };
+    });
+    return {
+      randomize: true,
+      suggestedBoxes: buildBoxes(st.checkedIn, nl, true),
+      playerReasons,
+      eloRatings: eloResult.ratings,
+      eloPlayed: eloResult.played,
+      eloFrac: {},
+    };
   };
   // Confirm: save admin-approved (possibly adjusted) boxes to Firestore
   const confirmCyc = (finalBoxes, randomize, movedIds) => {
@@ -1025,7 +1003,7 @@ function Home({ st, ladder, gn, ini, cd, requestJoin }) {
           </div>
           {boxSummaries.map(({ box, bi, done, total, bs, complete }) => (
             <div key={bi} style={{ display: "flex", alignItems: "center", gap: 10, padding: "7px 0", borderBottom: bi < boxSummaries.length - 1 ? "1px solid rgba(21,152,203,.08)" : "none" }}>
-              <span style={{ fontSize: 9, fontWeight: 700, color: box.isSwing ? P.blue : P.orange, width: 52, letterSpacing: 1 }}>{box.name.toUpperCase()}</span>
+              <span style={{ fontSize: 9, fontWeight: 700, color: P.orange, width: 52, letterSpacing: 1 }}>{box.name.toUpperCase()}</span>
               <span style={{ flex: 1, fontSize: 12, color: complete ? P.ok : P.off }}>
                 {complete ? "\u2713 " + (bs[0] ? gn(bs[0].id) : "—") : done > 0 ? (bs[0] ? gn(bs[0].id) + " leads" : "—") : "No matches yet"}
               </span>
@@ -1073,7 +1051,7 @@ function Home({ st, ladder, gn, ini, cd, requestJoin }) {
             </div>
             {lastChamps.map((w, i) => (
               <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "5px 0", borderBottom: i < lastChamps.length - 1 ? "1px solid rgba(21,152,203,.08)" : "none" }}>
-                <span style={{ fontSize: 9, fontWeight: 700, color: w.isSwing ? P.blue : P.orange, width: 60 }}>{w.box}</span>
+                <span style={{ fontSize: 9, fontWeight: 700, color: P.orange, width: 60 }}>{w.box}</span>
                 <span style={{ flex: 1, fontSize: 13, color: P.white, fontWeight: 600, fontFamily: "Georgia,serif" }}>{"\ud83e\udd47"} {w.name}</span>
               </div>
             ))}
@@ -1273,7 +1251,7 @@ function BoxesV({ st, gn, ini, logR, ffM }) {
         return (
           <div key={bi} style={{ marginBottom: 16 }}>
             <div onClick={() => togCol("box_" + bi)} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, cursor: "pointer", userSelect: "none" }}>
-              <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: 2, color: box.isSwing ? P.blue : P.orange }}>{box.name.toUpperCase()}</span>
+              <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: 2, color: P.orange }}>{box.name.toUpperCase()}</span>
               {done && <span style={{ fontSize: 8, color: P.ok, fontWeight: 700, background: "rgba(52,211,153,.1)", padding: "2px 8px", borderRadius: 10 }}>COMPLETE</span>}
               <span style={{ marginLeft: "auto", fontSize: 10, color: P.dim }}>{isCol ? "▶" : "▼"}</span>
             </div>
@@ -1644,8 +1622,8 @@ function RulesV() {
             <Row title="Disputes" body="If a situation isn't covered, default to the DRA House &quot;Bar&quot; Rules. Universal rule: if there's a dispute — replay the shot. No exceptions." last />
           </Section>
           <Section title="League Format">
-            <Row title="Box Structure" body="Players are grouped into boxes of up to 4. Full round-robin within each box — 3 matches per round. New/returning players start in the Swing Box." />
-            <Row title="Promotion & Relegation" body="Boxes are re-seeded each round based on ladder rank — the top-ranked players form Box 1, working down to the Swing Box. Win matches and earn points to climb the standings and earn a spot in a higher box next round. New players start in the Swing Box." />
+            <Row title="Box Structure" body="Players are grouped into boxes of up to 4. Full round-robin within each box — 3 matches per round. When the player count isn't divisible by 4, one box may have 3, 5, or 6 players." />
+            <Row title="Random Assignment" body="Boxes are randomly assigned at the start of every round — no carryover from previous rounds. Admins may re-shuffle or swap players before confirming." />
             <Row title="Inactivity" body="No match in 42 days → marked inactive and dropped to the bottom of the standings." last />
           </Section>
           <Section title="DRA House Bar Rules" color={P.blue}>
@@ -1785,7 +1763,7 @@ function PastCycleRow({ c, gn, cycleIdx, saveCycle }) {
             <p style={{ fontSize: 9, color: P.amber, fontWeight: 700, letterSpacing: 2, marginBottom: 8 }}>ROUND CHAMPIONS</p>
             {champions.map((ch, i) => ch.winner && (
               <div key={i} style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
-                <span style={{ fontSize: 9, color: ch.isSwing ? P.blue : P.dim, fontWeight: 700, width: 62, letterSpacing: 1, flexShrink: 0 }}>{ch.boxName.toUpperCase()}</span>
+                <span style={{ fontSize: 9, color: P.dim, fontWeight: 700, width: 62, letterSpacing: 1, flexShrink: 0 }}>{ch.boxName.toUpperCase()}</span>
                 <span style={{ fontSize: 12, fontWeight: 700 }}>🥇 {gn(ch.winner)}</span>
                 {ch.runner && <span style={{ fontSize: 11, color: P.dim }}>· 🥈 {gn(ch.runner)}</span>}
               </div>
@@ -1808,7 +1786,7 @@ function PastCycleRow({ c, gn, cycleIdx, saveCycle }) {
                 if (!bs.length) return null;
                 return (
                   <div key={bi} style={{ marginBottom: 14 }}>
-                    <p style={{ fontSize: 9, color: box.isSwing ? P.blue : P.orange, fontWeight: 700, letterSpacing: 2, marginBottom: 6 }}>{box.name.toUpperCase()}</p>
+                    <p style={{ fontSize: 9, color: P.orange, fontWeight: 700, letterSpacing: 2, marginBottom: 6 }}>{box.name.toUpperCase()}</p>
                     <div style={{ display: "flex", gap: 6, padding: "3px 0 5px", borderBottom: "1px solid rgba(21,152,203,.18)" }}>
                       <span style={{ width: 20 }} />
                       <span style={{ flex: 1, fontSize: 9, color: P.dim, fontWeight: 700, letterSpacing: 1 }}>PLAYER</span>
@@ -1934,7 +1912,7 @@ function PastCycleRow({ c, gn, cycleIdx, saveCycle }) {
 
 function AdminV({ st, ladder, previewCyc, confirmCyc, completeCyc, endEarlyCyc, undoCyc, resetAll, addP, rmP, ffM, gn, save, togCI, approvePlayer, rejectPlayer, endSeedingPhase, undoBracket }) {
   const [pin, setPin] = useState(""); const [ok, setOk] = useState(false); const [err, setErr] = useState(false);
-  const [cc, setCc] = useState(false); const [cr, setCr] = useState(false); const [cu, setCu] = useState(false); const [randomRound, setRandomRound] = useState(false);
+  const [cc, setCc] = useState(false); const [cr, setCr] = useState(false); const [cu, setCu] = useState(false);
   const [seedingConfirm, setSeedingConfirm] = useState(false);
   const [resetText, setResetText] = useState("");
   const [nm, setNm] = useState(""); const [rmId, setRmId] = useState(null); const [search, setSearch] = useState("");
@@ -2002,14 +1980,9 @@ function AdminV({ st, ladder, previewCyc, confirmCyc, completeCyc, endEarlyCyc, 
               const r = playerReasons[pid] || {};
               const lrank = lrMap[pid];
               const reasonLabel =
-                r.reason === "promoted"  ? "↑ Promoted from Box " + r.fromBox :
-                r.reason === "relegated" ? "↓ Relegated from Box " + r.fromBox :
-                r.reason === "held"      ? "Held · Box " + r.fromBox :
-                r.reason === "returning" ? "Returning from absence" :
+                r.reason === "returning" ? "Returning" :
                 r.reason === "new"       ? "New player" : null;
               const reasonColor =
-                r.reason === "promoted"  ? P.ok :
-                r.reason === "relegated" ? P.bad :
                 r.reason === "returning" ? P.blue :
                 r.reason === "new"       ? P.orange : P.dim;
               return (
@@ -2036,6 +2009,14 @@ function AdminV({ st, ladder, previewCyc, confirmCyc, completeCyc, endEarlyCyc, 
       })()}
       <div style={{ padding: "0 16px", display: "flex", flexDirection: "column", gap: 4 }}>
         <button onClick={() => { confirmCyc(previewBoxes, previewRandomize, manuallyMoved); setShowBoxPreview(false); setSwapSrc(null); setManuallyMoved(new Set()); }} style={{ ...bpS, marginTop: 0, background: "linear-gradient(135deg," + P.amber + ",#F59E0B)", color: P.navy }}>Start Round {st.cycleNumber + 1}</button>
+        <button onClick={() => {
+          const data = previewCyc(true);
+          if (!data) return;
+          setPreviewBoxes(data.suggestedBoxes.map(b => ({ ...b, players: [...b.players] })));
+          setSuggestedBoxes(data.suggestedBoxes.map(b => ({ ...b, players: [...b.players] })));
+          setManuallyMoved(new Set());
+          setSwapSrc(null);
+        }} style={{ ...bcS, color: P.orange }}>🎲 Re-shuffle</button>
         <button onClick={() => { setPreviewBoxes(suggestedBoxes.map(b => ({ ...b, players: [...b.players] }))); setManuallyMoved(new Set()); setSwapSrc(null); }} style={{ ...bcS, color: P.blue }}>Reset to Suggested</button>
         <button onClick={() => { setShowBoxPreview(false); setSwapSrc(null); setManuallyMoved(new Set()); }} style={bcS}>Cancel</button>
       </div>
@@ -2212,25 +2193,21 @@ function AdminV({ st, ladder, previewCyc, confirmCyc, completeCyc, endEarlyCyc, 
             if (noRound) {
               if (st.checkedIn.length < 4) return <p style={{ fontSize: 11, color: P.bad }}>Need 4+ signed up to start ({st.checkedIn.length} so far)</p>;
               const openPreview = () => {
-                const data = previewCyc(randomRound);
+                const data = previewCyc(true);
                 if (!data) return;
                 setPreviewBoxes(data.suggestedBoxes.map(b => ({ ...b, players: [...b.players] })));
                 setSuggestedBoxes(data.suggestedBoxes.map(b => ({ ...b, players: [...b.players] })));
-                setPreviewRandomize(data.randomize);
+                setPreviewRandomize(true);
                 setManuallyMoved(new Set());
                 setSwapSrc(null);
                 setPlayerReasons(data.playerReasons || {});
                 setPreviewElo({ ratings: data.eloRatings || {}, played: data.eloPlayed || {}, frac: data.eloFrac || {} });
                 setShowBoxPreview(true);
                 setCc(false);
-                setRandomRound(false);
               };
               return (
                 <div>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
-                    <input type="checkbox" id="rndRound" checked={randomRound} onChange={e => setRandomRound(e.target.checked)} style={{ width: 16, height: 16, accentColor: P.orange, cursor: "pointer" }} />
-                    <label htmlFor="rndRound" style={{ fontSize: 12, color: P.grey, cursor: "pointer" }}>Randomize boxes <span style={{ color: P.dim, fontSize: 10 }}>(ignore seeding)</span></label>
-                  </div>
+                  <p style={{ fontSize: 11, color: P.dim, marginBottom: 10 }}>Boxes are randomly assigned each round. You can re-shuffle or manually swap players in the preview.</p>
                   <button onClick={openPreview} style={{ ...bpS, background: "linear-gradient(135deg," + P.amber + ",#F59E0B)", color: P.navy }}>Preview Boxes for Round {st.cycleNumber + 1}</button>
                 </div>
               );
