@@ -1140,7 +1140,7 @@ function Home({ st, ladder, gn, ini, cd, requestJoin }) {
                                 <span style={{ fontSize: 10, fontWeight: 700, color: h.forfeit ? P.dim : h.won ? P.ok : P.bad, width: 14, flexShrink: 0 }}>{h.forfeit ? "FF" : h.won ? "W" : "L"}</span>
                                 <span style={{ fontSize: 11, color: P.off, width: 30, flexShrink: 0 }}>{h.forfeit ? "—" : h.myScore + "-" + h.oppScore}</span>
                                 <span style={{ fontSize: 11, color: P.white, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>vs {h.oppName}</span>
-                                <span style={{ fontSize: 9, fontWeight: 700, color: h.typeLabel === "Open" ? P.blue : h.typeLabel === "Wild Card" ? P.amber : P.orange, flexShrink: 0 }}>{h.typeLabel}</span>
+                                <span style={{ fontSize: 9, fontWeight: 700, color: h.typeLabel && h.typeLabel.startsWith("Bracket") ? P.amber : P.orange, flexShrink: 0 }}>{h.typeLabel}</span>
                                 {eloDlt !== null && !h.forfeit && <span style={{ fontSize: 9, fontWeight: 700, color: eloDlt > 0 ? P.ok : P.bad, flexShrink: 0, minWidth: 28, textAlign: "right" }}>{eloDlt > 0 ? "+" : ""}{eloDlt}</span>}
                                 <span style={{ fontSize: 9, color: P.dim, flexShrink: 0 }}>{h.completedAt ? fmtDate(h.completedAt) : ""}</span>
                               </div>
@@ -1662,7 +1662,7 @@ function RulesV() {
       {tab === "scoring" && (
         <div>
           <Section title="Match Points">
-            <p style={{ fontSize: 11, color: P.dim, marginBottom: 12 }}>Applies to box matches and wild card matches. Best of 3 games (race to 2).</p>
+            <p style={{ fontSize: 11, color: P.dim, marginBottom: 12 }}>Applies to all box matches. Best of 3 games (race to 2).</p>
             <div style={{ borderRadius: 12, overflow: "hidden", border: "1px solid rgba(255,255,255,.1)" }}>
               {[
                 ["Win 2–0", "Shutout — opponent scores 0 games", "5 pts", P.orange],
@@ -1698,30 +1698,12 @@ function RulesV() {
               ))}
             </div>
           </Section>
-          <Section title="Open Challenges">
-            <div style={{ borderRadius: 12, overflow: "hidden", border: "1px solid rgba(255,255,255,.1)" }}>
-              {[
-                ["Win", "Defeat any opponent in an open challenge", "+2 pts", P.blue],
-                ["Loss", "Open challenge loss — no penalty", "0 pts", P.dim],
-              ].map(([result, desc, pts, color], i) => (
-                <div key={result} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", background: i % 2 === 0 ? "rgba(0,48,82,.4)" : "transparent", borderBottom: i < 1 ? "1px solid rgba(255,255,255,.05)" : "none" }}>
-                  <div style={{ flex: 1 }}>
-                    <p style={{ fontSize: 13, fontWeight: 700, color: P.off, marginBottom: 2 }}>{result}</p>
-                    <p style={{ fontSize: 10, color: P.dim }}>{desc}</p>
-                  </div>
-                  <span style={{ fontSize: 20, fontWeight: 700, color, minWidth: 48, textAlign: "right" }}>{pts}</span>
-                </div>
-              ))}
-            </div>
-          </Section>
           <div style={{ ...gc, background: "rgba(21,152,203,.06)", border: "1px solid rgba(21,152,203,.2)" }}>
             <h4 style={{ fontSize: 13, fontWeight: 700, color: P.blue, marginBottom: 10 }}>Best Possible Round</h4>
             <p style={{ fontSize: 12, color: P.grey, lineHeight: 1.8 }}>
               3× shutout box wins (3 × 5) → <span style={{ color: P.orange, fontWeight: 700 }}>15 pts</span><br />
               Box winner bonus → <span style={{ color: P.orange, fontWeight: 700 }}>+3 pts</span><br />
-              Wild card shutout win → <span style={{ color: P.orange, fontWeight: 700 }}>+5 pts</span><br />
-              <span style={{ color: P.off, fontWeight: 700, fontSize: 13 }}>Box/WC total: 23 pts</span><br />
-              <span style={{ color: P.blue, fontSize: 11 }}>+ Open challenges: +2 pts each (unlimited)</span>
+              <span style={{ color: P.off, fontWeight: 700, fontSize: 13 }}>Total: 18 pts</span>
             </p>
           </div>
         </div>
@@ -1846,30 +1828,6 @@ function PastCycleRow({ c, gn, cycleIdx, saveCycle }) {
                   </div>
                 );
               })}
-              {realWC.length > 0 && (
-                <div style={{ marginBottom: 10 }}>
-                  <p style={{ fontSize: 9, color: P.wc, fontWeight: 700, letterSpacing: 2, marginBottom: 6 }}>WILD CARDS</p>
-                  {realWC.map(m => (
-                    <div key={m.id} style={{ display: "flex", alignItems: "center", padding: "4px 0", borderBottom: "1px solid rgba(21,152,203,.04)", fontSize: 12, gap: 6 }}>
-                      <span style={{ flex: 1, textAlign: "right", fontWeight: m.score1 > m.score2 ? 700 : 400 }}>{gn(m.player1)}</span>
-                      <span style={{ color: P.wc, fontWeight: 700, width: 40, textAlign: "center" }}>{m.score1}–{m.score2}</span>
-                      <span style={{ flex: 1, fontWeight: m.score2 > m.score1 ? 700 : 400 }}>{gn(m.player2)}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
-              {realOC.length > 0 && (
-                <div style={{ marginBottom: 10 }}>
-                  <p style={{ fontSize: 9, color: P.blue, fontWeight: 700, letterSpacing: 2, marginBottom: 6 }}>OPEN CHALLENGES</p>
-                  {realOC.map(m => (
-                    <div key={m.id} style={{ display: "flex", alignItems: "center", padding: "4px 0", borderBottom: "1px solid rgba(21,152,203,.04)", fontSize: 12, gap: 6 }}>
-                      <span style={{ flex: 1, textAlign: "right", fontWeight: m.score1 > m.score2 ? 700 : 400 }}>{gn(m.player1)}</span>
-                      <span style={{ color: P.blue, fontWeight: 700, width: 40, textAlign: "center" }}>{m.score1}–{m.score2}</span>
-                      <span style={{ flex: 1, fontWeight: m.score2 > m.score1 ? 700 : 400 }}>{gn(m.player2)}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
               {(c.bonuses || []).filter(b => b.pts > 0).length > 0 && (
                 <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid rgba(21,152,203,.1)" }}>
                   <p style={{ fontSize: 9, color: P.amber, fontWeight: 700, letterSpacing: 2, marginBottom: 6 }}>BONUSES AWARDED</p>
@@ -1904,7 +1862,7 @@ function PastCycleRow({ c, gn, cycleIdx, saveCycle }) {
                 const losId = w1 ? m.player2 : m.player1;
                 const ws = w1 ? m.score1 : m.score2;
                 const ls = w1 ? m.score2 : m.score1;
-                const typeColor = m._type === "Box" ? P.orange : m._type === "WC" ? P.wc : P.blue;
+                const typeColor = P.orange;
                 const dateStr = m.completedAt ? m.completedAt.slice(5, 10).replace("-", "/") : "";
                 if (editingId === m.id) return (
                   <div key={m.id} style={{ padding: "8px 0", borderBottom: "1px solid rgba(21,152,203,.08)" }}>
