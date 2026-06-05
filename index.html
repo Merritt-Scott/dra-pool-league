@@ -1639,6 +1639,38 @@ function BracketV({ st, gn, ladder, recordBracketMatch, isAdmin }) {
 
   const br = st.bracket;
   const champ = st.champion;
+  const numRounds = br.rounds.length;
+
+  // ─── BRACKET TREE LAYOUT CONSTANTS ───
+  // The tree is laid out as columns (one per round). Each match's vertical
+  // position is determined by its index; matches in later rounds sit at the
+  // midpoint of the two source matches they descend from.
+  const MATCH_H = 64;        // visual height of one match card
+  const MATCH_GAP = 18;      // gap between two matches in Round 1
+  const COL_W = 178;         // width of each round column
+  const COL_GAP = 38;        // horizontal gap between columns (for connector lines)
+  const SLOT = MATCH_H + MATCH_GAP; // base vertical slot in Round 1
+  const r1Count = br.rounds[0].matches.length;
+  const treeHeight = r1Count * SLOT;
+  const treeWidth = numRounds * COL_W + (numRounds - 1) * COL_GAP;
+
+  // Compute (x, y, height) for every match across all rounds.
+  // Round r has matchesInRound = r1Count / 2^r matches.
+  // Each match in round r covers 2^r Round-1 slots, centered on those slots.
+  const matchPositions = {}; // matchId -> { x, yCenter, top, height }
+  br.rounds.forEach((round, ri) => {
+    const slotsPerMatch = Math.pow(2, ri);
+    round.matches.forEach((m, mi) => {
+      const firstSlot = mi * slotsPerMatch;
+      const yCenter = (firstSlot + slotsPerMatch / 2) * SLOT;
+      matchPositions[m.id] = {
+        x: ri * (COL_W + COL_GAP),
+        yCenter,
+        top: yCenter - MATCH_H / 2,
+        ri, mi,
+      };
+    });
+  });
 
   const scoreInput = { background: "rgba(255,255,255,.06)", border: "1px solid rgba(255,255,255,.18)", borderRadius: 8, padding: "6px 8px", color: P.white, fontSize: 15, fontWeight: 700, width: 44, textAlign: "center", fontFamily: "DM Sans,sans-serif" };
 
@@ -1657,91 +1689,254 @@ function BracketV({ st, gn, ladder, recordBracketMatch, isAdmin }) {
       recordBracketMatch(m.id, winnerId, n1, n2);
       setSelectedMatch(null); setS1(""); setS2("");
     };
-    return React.createElement("div", { style: { position: "fixed", inset: 0, zIndex: 9999, background: "rgba(0,10,20,.85)", backdropFilter: "blur(6px)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }, onClick: () => { setSelectedMatch(null); setS1(""); setS2(""); } },
-      React.createElement("div", { style: { ...gc, maxWidth: 380, width: "100%", padding: 20 }, onClick: e => e.stopPropagation() },
-        React.createElement("h3", { style: { fontSize: 14, fontWeight: 700, color: P.orange, marginBottom: 4, letterSpacing: 1.5, textTransform: "uppercase" } }, "Round " + m.round + " · Best of 5"),
-        React.createElement("p", { style: { fontSize: 11, color: P.grey, marginBottom: 16 } }, "Enter racks won by each player (first to 3 wins)"),
-        React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12, padding: "10px 12px", background: P.glass, borderRadius: 10, border: "1px solid " + P.gb } },
-          React.createElement("div", { style: { flex: 1 } },
-            React.createElement("div", { style: { fontSize: 9, color: P.dim, letterSpacing: 1, marginBottom: 2 } }, "SEED " + (m.p1Seed || "?")),
-            React.createElement("div", { style: { fontSize: 14, fontWeight: 700, color: P.white } }, p1Name)),
-          React.createElement("input", { type: "number", min: 0, max: 3, value: s1, onChange: e => setS1(e.target.value), style: scoreInput, placeholder: "0" })),
-        React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16, padding: "10px 12px", background: P.glass, borderRadius: 10, border: "1px solid " + P.gb } },
-          React.createElement("div", { style: { flex: 1 } },
-            React.createElement("div", { style: { fontSize: 9, color: P.dim, letterSpacing: 1, marginBottom: 2 } }, "SEED " + (m.p2Seed || "?")),
-            React.createElement("div", { style: { fontSize: 14, fontWeight: 700, color: P.white } }, p2Name)),
-          React.createElement("input", { type: "number", min: 0, max: 3, value: s2, onChange: e => setS2(e.target.value), style: scoreInput, placeholder: "0" })),
-        React.createElement("p", { style: { fontSize: 10, color: P.dim, marginBottom: 8, textAlign: "center" } }, "Tap the winner below to confirm"),
-        React.createElement("div", { style: { display: "flex", gap: 8 } },
-          React.createElement("button", { onClick: () => submit(m.p1), style: { flex: 1, padding: "10px 8px", background: "linear-gradient(135deg," + P.ok + ",#0e9c6f)", border: "none", borderRadius: 10, color: P.white, fontSize: 12, fontWeight: 700, cursor: "pointer" } }, p1Name + " wins"),
-          React.createElement("button", { onClick: () => submit(m.p2), style: { flex: 1, padding: "10px 8px", background: "linear-gradient(135deg," + P.ok + ",#0e9c6f)", border: "none", borderRadius: 10, color: P.white, fontSize: 12, fontWeight: 700, cursor: "pointer" } }, p2Name + " wins")),
-        React.createElement("button", { onClick: () => { setSelectedMatch(null); setS1(""); setS2(""); }, style: { width: "100%", marginTop: 10, padding: "8px", background: "transparent", border: "1px solid " + P.dim, borderRadius: 10, color: P.dim, fontSize: 11, fontWeight: 700, cursor: "pointer" } }, "Cancel")));
+    return (
+      <div style={{ position: "fixed", inset: 0, zIndex: 9999, background: "rgba(0,10,20,.85)", backdropFilter: "blur(6px)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }} onClick={() => { setSelectedMatch(null); setS1(""); setS2(""); }}>
+        <div style={{ ...gc, maxWidth: 380, width: "100%", padding: 20 }} onClick={e => e.stopPropagation()}>
+          <h3 style={{ fontSize: 14, fontWeight: 700, color: P.orange, marginBottom: 4, letterSpacing: 1.5, textTransform: "uppercase" }}>Round {m.round} · Best of 5</h3>
+          <p style={{ fontSize: 11, color: P.grey, marginBottom: 16 }}>Enter racks won by each player (first to 3 wins)</p>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12, padding: "10px 12px", background: P.glass, borderRadius: 10, border: "1px solid " + P.gb }}>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 9, color: P.dim, letterSpacing: 1, marginBottom: 2 }}>SEED {m.p1Seed || "?"}</div>
+              <div style={{ fontSize: 14, fontWeight: 700, color: P.white }}>{p1Name}</div>
+            </div>
+            <input type="number" min="0" max="3" value={s1} onChange={e => setS1(e.target.value)} style={scoreInput} placeholder="0" />
+          </div>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16, padding: "10px 12px", background: P.glass, borderRadius: 10, border: "1px solid " + P.gb }}>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 9, color: P.dim, letterSpacing: 1, marginBottom: 2 }}>SEED {m.p2Seed || "?"}</div>
+              <div style={{ fontSize: 14, fontWeight: 700, color: P.white }}>{p2Name}</div>
+            </div>
+            <input type="number" min="0" max="3" value={s2} onChange={e => setS2(e.target.value)} style={scoreInput} placeholder="0" />
+          </div>
+          <p style={{ fontSize: 10, color: P.dim, marginBottom: 8, textAlign: "center" }}>Tap the winner below to confirm</p>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={() => submit(m.p1)} style={{ flex: 1, padding: "10px 8px", background: "linear-gradient(135deg," + P.ok + ",#0e9c6f)", border: "none", borderRadius: 10, color: P.white, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>{p1Name} wins</button>
+            <button onClick={() => submit(m.p2)} style={{ flex: 1, padding: "10px 8px", background: "linear-gradient(135deg," + P.ok + ",#0e9c6f)", border: "none", borderRadius: 10, color: P.white, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>{p2Name} wins</button>
+          </div>
+          <button onClick={() => { setSelectedMatch(null); setS1(""); setS2(""); }} style={{ width: "100%", marginTop: 10, padding: "8px", background: "transparent", border: "1px solid " + P.dim, borderRadius: 10, color: P.dim, fontSize: 11, fontWeight: 700, cursor: "pointer" }}>Cancel</button>
+        </div>
+      </div>
+    );
   })();
 
-  const renderMatch = (m, ri) => {
-    const isFinal = ri === br.rounds.length - 1;
+  // ─── MATCH CARD (used inside the tree) ───
+  const renderMatchCard = (m, isFinalMatch) => {
     const p1Name = m.p1 ? gn(m.p1) : (m.isBye ? "BYE" : "TBD");
     const p2Name = m.p2 ? gn(m.p2) : (m.isBye ? "BYE" : "TBD");
     const canRecord = isAdmin && !m.completed && m.p1 && m.p2 && !m.isBye;
     const w = m.winner;
     const p1Won = w && w === m.p1;
     const p2Won = w && w === m.p2;
-    const playerRow = (name, seed, won, isWinner, score) => React.createElement("div", {
-      style: {
-        display: "flex", alignItems: "center", padding: "6px 10px",
-        background: isWinner ? "rgba(52,211,153,.12)" : "transparent",
-        borderLeft: isWinner ? "3px solid " + P.ok : "3px solid transparent",
-        borderRadius: 4, opacity: !won && m.completed ? .5 : 1, gap: 6
-      }
-    },
-      seed && React.createElement("span", { style: { fontSize: 9, color: P.dim, fontWeight: 700, minWidth: 16 } }, "#" + seed),
-      React.createElement("span", { style: { flex: 1, fontSize: 12, fontWeight: isWinner ? 700 : 500, color: isWinner ? P.white : P.off } }, name),
-      score !== null && score !== undefined && React.createElement("span", { style: { fontSize: 13, fontWeight: 700, color: isWinner ? P.ok : P.dim, minWidth: 16, textAlign: "right" } }, score)
+
+    // Visual treatment changes for the final
+    const accent = isFinalMatch ? P.orange : P.blue;
+    const accentDim = isFinalMatch ? "rgba(241,138,0,.25)" : "rgba(21,152,203,.25)";
+
+    const playerRow = (name, seed, isWinner, isLoser, score, isWaiting) => (
+      <div style={{
+        display: "flex", alignItems: "center", gap: 6,
+        padding: "8px 10px",
+        background: isWinner ? (isFinalMatch ? "linear-gradient(90deg,rgba(241,138,0,.18),rgba(241,138,0,.04))" : "linear-gradient(90deg,rgba(52,211,153,.14),rgba(52,211,153,.02))") : "transparent",
+        borderLeft: isWinner ? "3px solid " + (isFinalMatch ? P.orange : P.ok) : "3px solid transparent",
+        opacity: isLoser ? .42 : 1,
+        position: "relative",
+      }}>
+        <span style={{
+          fontSize: 8, fontWeight: 800, letterSpacing: 0.5, minWidth: 18,
+          textAlign: "center", padding: "1px 4px", borderRadius: 3,
+          background: seed ? "rgba(255,255,255,.06)" : "transparent",
+          color: seed ? P.dim : "transparent",
+          border: seed ? "1px solid rgba(255,255,255,.08)" : "1px solid transparent",
+        }}>{seed ? seed : "—"}</span>
+        <span style={{
+          flex: 1, fontSize: 11.5,
+          fontWeight: isWinner ? 700 : 500,
+          color: isWaiting ? P.dim : (isWinner ? P.white : P.off),
+          fontStyle: isWaiting ? "italic" : "normal",
+          overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis",
+        }}>{name}</span>
+        {(score !== null && score !== undefined) && (
+          <span style={{
+            fontSize: 13, fontWeight: 800,
+            color: isWinner ? (isFinalMatch ? P.orange : P.ok) : P.dim,
+            minWidth: 14, textAlign: "right",
+            fontFamily: "Georgia,serif",
+          }}>{score}</span>
+        )}
+      </div>
     );
-    return React.createElement("div", {
-      key: m.id,
-      onClick: canRecord ? () => { setSelectedMatch(m); setS1(""); setS2(""); } : null,
-      style: {
-        background: P.glass, borderRadius: 10, border: "1px solid " + (canRecord ? "rgba(241,138,0,.4)" : P.gb),
-        marginBottom: 8, cursor: canRecord ? "pointer" : "default",
-        boxShadow: canRecord ? "0 0 0 1px rgba(241,138,0,.15)" : "none",
-        overflow: "hidden"
-      }
-    },
-      playerRow(p1Name, m.p1Seed, m.completed && p1Won, p1Won, m.score1),
-      React.createElement("div", { style: { height: 1, background: P.gb, margin: "0 10px" } }),
-      playerRow(p2Name, m.p2Seed, m.completed && p2Won, p2Won, m.score2),
-      canRecord && React.createElement("div", { style: { padding: "4px 10px 6px", textAlign: "center", fontSize: 9, color: P.orange, letterSpacing: 1, fontWeight: 700 } }, "TAP TO RECORD"),
-      m.isBye && React.createElement("div", { style: { padding: "4px 10px 6px", textAlign: "center", fontSize: 9, color: P.dim, letterSpacing: 1, fontWeight: 700 } }, "AUTO-ADVANCE"));
+
+    return (
+      <div
+        key={m.id}
+        onClick={canRecord ? () => { setSelectedMatch(m); setS1(""); setS2(""); } : undefined}
+        style={{
+          position: "absolute",
+          left: matchPositions[m.id].x,
+          top: matchPositions[m.id].top,
+          width: COL_W,
+          height: MATCH_H,
+          background: m.completed ? "linear-gradient(180deg,rgba(0,28,52,.85),rgba(0,18,38,.95))" : "rgba(0,24,46,.6)",
+          borderRadius: 8,
+          border: "1px solid " + (canRecord ? "rgba(241,138,0,.5)" : isFinalMatch && !m.completed ? "rgba(241,138,0,.35)" : accentDim),
+          boxShadow: canRecord
+            ? "0 0 0 1px rgba(241,138,0,.18), 0 4px 12px rgba(0,0,0,.4)"
+            : m.completed ? "0 2px 8px rgba(0,0,0,.3)" : "0 2px 6px rgba(0,0,0,.25)",
+          cursor: canRecord ? "pointer" : "default",
+          overflow: "hidden",
+          transition: "transform .15s, box-shadow .15s",
+          animation: canRecord ? "bracketPulse 2.4s ease-in-out infinite" : "none",
+        }}
+        onMouseEnter={canRecord ? e => { e.currentTarget.style.transform = "translateY(-1px)"; } : undefined}
+        onMouseLeave={canRecord ? e => { e.currentTarget.style.transform = "translateY(0)"; } : undefined}
+      >
+        {playerRow(p1Name, m.p1Seed, m.completed && p1Won, m.completed && !p1Won && !m.isBye, m.score1, !m.p1 && !m.isBye)}
+        <div style={{ height: 1, background: "rgba(255,255,255,.06)" }} />
+        {playerRow(p2Name, m.p2Seed, m.completed && p2Won, m.completed && !p2Won && !m.isBye, m.score2, !m.p2 && !m.isBye)}
+        {canRecord && (
+          <div style={{ position: "absolute", top: 4, right: 6, fontSize: 7, fontWeight: 800, color: P.orange, letterSpacing: 1, background: "rgba(241,138,0,.12)", padding: "1px 5px", borderRadius: 3, border: "1px solid rgba(241,138,0,.3)" }}>TAP</div>
+        )}
+        {m.isBye && (
+          <div style={{ position: "absolute", top: 4, right: 6, fontSize: 7, fontWeight: 800, color: P.dim, letterSpacing: 1, background: "rgba(255,255,255,.04)", padding: "1px 5px", borderRadius: 3, border: "1px solid rgba(255,255,255,.06)" }}>BYE</div>
+        )}
+      </div>
+    );
   };
 
-  return React.createElement("div", { style: { paddingTop: 16 } },
-    React.createElement(Tt, null, "Tournament Bracket"),
-    React.createElement("p", { style: { fontSize: 12, color: P.grey, marginBottom: 16 } }, "Single elimination · Best of 5 · " + br.size + "-player bracket"),
-    champ && React.createElement("div", {
-      style: {
-        ...gc, textAlign: "center", padding: 20, marginBottom: 16,
-        background: "linear-gradient(135deg, rgba(241,138,0,.18), rgba(255,173,51,.08))",
-        border: "2px solid " + P.orange
-      }
-    },
-      React.createElement("div", { style: { fontSize: 32, marginBottom: 6 } }, "🏆"),
-      React.createElement("div", { style: { fontSize: 11, color: P.amber, letterSpacing: 2, fontWeight: 700, marginBottom: 4 } }, "CHAMPION"),
-      React.createElement("div", { style: { fontSize: 22, fontWeight: 700, color: P.white, fontFamily: "Georgia,serif" } }, champ.name),
-      React.createElement("div", { style: { fontSize: 11, color: P.off, marginTop: 4 } }, champ.season || "Summer 2026")),
-    br.rounds.map((round, ri) => {
-      const roundLabel = ri === br.rounds.length - 1 ? "FINAL"
-        : ri === br.rounds.length - 2 ? "SEMIFINAL"
-        : "ROUND " + round.round;
-      const done = round.matches.filter(m => m.completed).length;
-      const total = round.matches.length;
-      return React.createElement("div", { key: round.round, style: { marginBottom: 18 } },
-        React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 8, paddingBottom: 4, borderBottom: "1px solid " + P.gb } },
-          React.createElement("h4", { style: { fontSize: 11, fontWeight: 700, color: P.orange, letterSpacing: 2, textTransform: "uppercase", margin: 0 } }, roundLabel),
-          React.createElement("span", { style: { fontSize: 10, color: P.dim } }, done + "/" + total)),
-        round.matches.map(m => renderMatch(m, ri)));
-    }),
-    matchModal);
+  // ─── CONNECTOR LINES (SVG) ───
+  // Each match in round r > 0 connects back to two source matches in round r-1.
+  // Sources are at positions (r-1, 2*mi) and (r-1, 2*mi+1).
+  const connectors = [];
+  br.rounds.forEach((round, ri) => {
+    if (ri === 0) return; // round 1 has no incoming connectors
+    round.matches.forEach((m, mi) => {
+      const dest = matchPositions[m.id];
+      const srcTop = matchPositions[br.rounds[ri - 1].matches[mi * 2].id];
+      const srcBot = matchPositions[br.rounds[ri - 1].matches[mi * 2 + 1].id];
+      // Right edge of source = COL_W from src.x. Left edge of dest = dest.x.
+      const x1 = srcTop.x + COL_W;
+      const x2 = dest.x;
+      const midX = x1 + (x2 - x1) / 2;
+      // Choose color: gold if this dest match is the final, blue otherwise.
+      const isPathToFinal = ri === numRounds - 1;
+      const color = isPathToFinal ? "rgba(241,138,0,.4)" : "rgba(21,152,203,.3)";
+      // Highlight if a source match completed (i.e., the winner has flowed through)
+      const sourceCompleted = br.rounds[ri - 1].matches[mi * 2].completed || br.rounds[ri - 1].matches[mi * 2 + 1].completed;
+      const stroke = sourceCompleted ? (isPathToFinal ? "rgba(241,138,0,.7)" : "rgba(52,211,153,.55)") : color;
+      const strokeWidth = sourceCompleted ? 1.5 : 1;
+      connectors.push(
+        <g key={m.id + "-conn"}>
+          {/* Horizontal stub from src top */}
+          <line x1={x1} y1={srcTop.yCenter} x2={midX} y2={srcTop.yCenter} stroke={stroke} strokeWidth={strokeWidth} />
+          {/* Horizontal stub from src bot */}
+          <line x1={x1} y1={srcBot.yCenter} x2={midX} y2={srcBot.yCenter} stroke={stroke} strokeWidth={strokeWidth} />
+          {/* Vertical join */}
+          <line x1={midX} y1={srcTop.yCenter} x2={midX} y2={srcBot.yCenter} stroke={stroke} strokeWidth={strokeWidth} />
+          {/* Horizontal arrival at dest center */}
+          <line x1={midX} y1={dest.yCenter} x2={x2} y2={dest.yCenter} stroke={stroke} strokeWidth={strokeWidth} />
+        </g>
+      );
+    });
+  });
+
+  // Round labels (column headers, sticky at top of scroll)
+  const roundLabel = (ri) => {
+    if (ri === numRounds - 1) return "FINAL";
+    if (ri === numRounds - 2) return "SEMIFINAL";
+    if (ri === numRounds - 3) return "QUARTERFINAL";
+    if (ri === numRounds - 4) return "ROUND OF 16";
+    return "ROUND " + (ri + 1);
+  };
+
+  return (
+    <div style={{ paddingTop: 16 }}>
+      <style>{`
+        @keyframes bracketPulse {
+          0%, 100% { box-shadow: 0 0 0 1px rgba(241,138,0,.18), 0 4px 12px rgba(0,0,0,.4); }
+          50% { box-shadow: 0 0 0 2px rgba(241,138,0,.42), 0 4px 16px rgba(241,138,0,.18); }
+        }
+        @keyframes trophyShine {
+          0%, 100% { filter: drop-shadow(0 0 8px rgba(241,138,0,.4)); }
+          50% { filter: drop-shadow(0 0 18px rgba(255,173,51,.7)); }
+        }
+      `}</style>
+      <Tt>Tournament Bracket</Tt>
+      <p style={{ fontSize: 12, color: P.grey, marginBottom: 16, padding: "0 16px" }}>
+        Single elimination · Best of 5 · {br.size}-player bracket
+      </p>
+
+      {/* Champion banner */}
+      {champ && (
+        <div style={{
+          ...gc, textAlign: "center", padding: "24px 20px", marginBottom: 18,
+          background: "radial-gradient(circle at 50% 0%, rgba(241,138,0,.28), rgba(255,173,51,.06) 60%, transparent), linear-gradient(180deg, rgba(0,28,52,.6), rgba(0,18,38,.9))",
+          border: "2px solid " + P.orange,
+          boxShadow: "0 0 40px rgba(241,138,0,.25), inset 0 1px 0 rgba(255,173,51,.2)",
+          position: "relative",
+          overflow: "hidden",
+        }}>
+          <div style={{ fontSize: 44, marginBottom: 6, animation: "trophyShine 2.5s ease-in-out infinite" }}>🏆</div>
+          <div style={{ fontSize: 10, color: P.amber, letterSpacing: 5, fontWeight: 800, marginBottom: 6 }}>CHAMPION</div>
+          <div style={{ fontSize: 26, fontWeight: 700, color: P.white, fontFamily: "Georgia,serif", letterSpacing: 0.5 }}>{champ.name}</div>
+          <div style={{ fontSize: 11, color: P.off, marginTop: 6, letterSpacing: 2 }}>{(champ.season || "Summer 2026").toUpperCase()}</div>
+          <div style={{ marginTop: 12, fontSize: 10, color: P.amber, letterSpacing: 3, opacity: .7 }}>— DRA POOL LEAGUE —</div>
+        </div>
+      )}
+
+      {/* The bracket tree — horizontally scrollable on small screens */}
+      <div style={{
+        ...gc,
+        padding: "0 0 18px",
+        overflowX: "auto",
+        WebkitOverflowScrolling: "touch",
+        background: "linear-gradient(180deg, rgba(0,18,38,.4), rgba(0,12,28,.6))",
+      }}>
+        {/* Round labels row (sticky-ish header) */}
+        <div style={{ display: "flex", padding: "14px 0 12px", borderBottom: "1px solid " + P.gb, minWidth: treeWidth + 32, marginBottom: 8 }}>
+          {br.rounds.map((round, ri) => {
+            const done = round.matches.filter(m => m.completed).length;
+            const total = round.matches.length;
+            const isFinal = ri === numRounds - 1;
+            return (
+              <div key={ri} style={{ width: COL_W, marginLeft: ri === 0 ? 16 : COL_GAP, textAlign: "center" }}>
+                <div style={{
+                  fontSize: 10, fontWeight: 800,
+                  color: isFinal ? P.orange : P.blue,
+                  letterSpacing: 2.5,
+                  marginBottom: 3,
+                  textShadow: isFinal ? "0 0 12px rgba(241,138,0,.4)" : "none",
+                }}>{roundLabel(ri)}</div>
+                <div style={{ fontSize: 9, color: P.dim, fontWeight: 600 }}>{done}/{total}</div>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* The actual tree */}
+        <div style={{ position: "relative", width: treeWidth + 32, height: treeHeight, marginLeft: 16, marginTop: 4 }}>
+          {/* SVG connector layer (behind cards) */}
+          <svg
+            width={treeWidth}
+            height={treeHeight}
+            style={{ position: "absolute", inset: 0, pointerEvents: "none", overflow: "visible" }}
+          >
+            {connectors}
+          </svg>
+          {/* Match cards (absolute positioned) */}
+          {br.rounds.flatMap((round, ri) => round.matches.map(m => renderMatchCard(m, ri === numRounds - 1)))}
+        </div>
+      </div>
+
+      {/* Scroll hint for mobile */}
+      {treeWidth > 360 && (
+        <p style={{ fontSize: 10, color: P.dim, textAlign: "center", marginTop: 8, letterSpacing: 1 }}>
+          ← Swipe to explore the bracket →
+        </p>
+      )}
+
+      {matchModal}
+    </div>
+  );
 }
 
 // ─── CHECK IN ───────────────────────────────────────────────
