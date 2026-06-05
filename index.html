@@ -490,7 +490,27 @@ function App() {
           throw new Error(`Refused: document would be ${(sizeBytes/1024).toFixed(0)} KiB (limit 900 KiB). Archive or trim auditLog.`);
         }
 
-        tx.set(DOC_REF, next);
+        // ── Sanitize undefined → null ──
+        // Firestore rejects any document containing `undefined` field values.
+        // Even though we try to coerce these at the call site, a single missed
+        // field can take down a whole transaction. JSON.stringify drops
+        // undefined values silently, but that loses the field entirely — we
+        // want to preserve the key with a null value instead. Walk the object
+        // tree and convert undefined → null.
+        const sanitize = (v) => {
+          if (v === undefined) return null;
+          if (v === null) return null;
+          if (Array.isArray(v)) return v.map(sanitize);
+          if (typeof v === "object") {
+            const out = {};
+            for (const k of Object.keys(v)) out[k] = sanitize(v[k]);
+            return out;
+          }
+          return v;
+        };
+        const clean = sanitize(next);
+
+        tx.set(DOC_REF, clean);
       });
     } catch (e) {
       console.error("Save failed:", e);
@@ -935,11 +955,19 @@ function App() {
       if (nextRound) {
         const nextMatch = nextRound.matches[Math.floor(foundMatchIdx / 2)];
         const winSeed = winnerId === foundMatch.p1 ? foundMatch.p1Seed : foundMatch.p2Seed;
-        if (foundMatchIdx % 2 === 0) { nextMatch.p1 = winnerId; nextMatch.p1Seed = winSeed; }
-        else { nextMatch.p2 = winnerId; nextMatch.p2Seed = winSeed; }
+        if (foundMatchIdx % 2 === 0) {
+          nextMatch.p1 = winnerId;
+          nextMatch.p1Seed = winSeed == null ? null : winSeed;
+        } else {
+          nextMatch.p2 = winnerId;
+          nextMatch.p2Seed = winSeed == null ? null : winSeed;
+        }
       }
-      // If this was the final, crown a champion
-      let champion = cur.champion;
+      // If this was the final, crown a champion. Otherwise preserve whatever
+      // champion field is on the doc — but coerce undefined → null so Firestore
+      // doesn't reject the write. Older documents that pre-date the champion
+      // field may have it as undefined; we never want to write undefined.
+      let champion = (cur.champion === undefined) ? null : cur.champion;
       const isFinal = foundRoundIdx === bracket.rounds.length - 1;
       if (isFinal) {
         const champName = (cur.players.find(p => p.id === winnerId) || {}).name || "?";
@@ -988,9 +1016,11 @@ function App() {
         // If next-round match had been completed, that's a cascade we don't auto-handle; warn admin
         if (nm.completed) flash("Note: subsequent match was already played — review bracket");
       }
-      // If we just undid the final, also clear the champion
+      // If we just undid the final, also clear the champion. Otherwise preserve
+      // whatever champion is on the doc — coerced from undefined to null so
+      // Firestore doesn't reject the write.
       const isFinal = latestRoundIdx === bracket.rounds.length - 1;
-      const champion = isFinal ? null : cur.champion;
+      const champion = isFinal ? null : (cur.champion === undefined ? null : cur.champion);
       flash("Bracket match undone");
       return withLog({ ...cur, bracket, champion }, "BRACKET_MATCH_UNDONE", `R${m.round} undid: ${(cur.players.find(p => p.id === undoneWinner) || {}).name || "?"}`);
     }, "Couldn't undo bracket");
@@ -1437,7 +1467,7 @@ function Home({ st, ladder, gn, ini, cd, requestJoin }) {
                   opacity: isOut ? .72 : 1,
                 }}>
                   {bracketInfo ? (
-                    <span style={{ width: 36, fontWeight: 700, fontSize: 12, color: br.seed === 1 ? P.orange : br.seed <= 4 ? P.amber : br.seed <= 8 ? P.blue : P.dim }}>
+                    <span style={{ width: 36, fontWeight: 700, fontSize: 12, color: br.seed === 1 ? P.orange : br.seed <= 3 ? P.amber : br.seed <= 8 ? P.blue : P.dim }}>
                       #{br.seed}
                     </span>
                   ) : (
