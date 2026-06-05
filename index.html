@@ -945,6 +945,7 @@ function App() {
       if (foundMatch.isBye) { flash("Cannot record bye"); return null; }
       if (!foundMatch.p1 || !foundMatch.p2) { flash("Match not ready"); return null; }
       if (winnerId !== foundMatch.p1 && winnerId !== foundMatch.p2) { flash("Invalid winner"); return null; }
+      if (foundMatch.completed) { flash("Match already completed — use Edit instead"); return null; }
       foundMatch.winner = winnerId;
       foundMatch.score1 = score1;
       foundMatch.score2 = score2;
@@ -979,6 +980,148 @@ function App() {
       }
       return withLog({ ...cur, bracket, champion }, "BRACKET_MATCH", `R${foundMatch.round} winner: ${(cur.players.find(p => p.id === winnerId) || {}).name || "?"}`);
     }, "Couldn't record bracket match");
+  };
+
+  // ─── EDIT a previously-recorded bracket match ─────────────────────────────
+  // Allows the admin to correct a mistake at any point in the bracket. When a
+  // past match's winner is changed, every downstream match that depended on
+  // the old winner is automatically cleared — including the championship if
+  // the edited match was on the path to the final.
+  //
+  // The cascade is bracket-correct: a match in round r at index i feeds into
+  // round r+1 at index ⌊i/2⌋. We walk that chain forward from the edited
+  // match, clearing scores/winners until we reach the end.
+  //
+  // The new winner is then re-propagated into the immediate next round so the
+  // bracket is ready to be played forward again.
+  const editBracketMatch = (matchId, newWinnerId, newScore1, newScore2) => {
+    autoBackup("pre-bracket-edit");
+    save(cur => {
+      if (!cur.bracket) { flash("No bracket"); return null; }
+      const bracket = JSON.parse(JSON.stringify(cur.bracket));
+      let foundMatch = null, foundRoundIdx = -1, foundMatchIdx = -1;
+      bracket.rounds.forEach((r, ri) => { r.matches.forEach((m, mi) => { if (m.id === matchId) { foundMatch = m; foundRoundIdx = ri; foundMatchIdx = mi; } }); });
+      if (!foundMatch) { flash("Match not found"); return null; }
+      if (foundMatch.isBye) { flash("Cannot edit bye"); return null; }
+      if (!foundMatch.completed) { flash("Match isn't completed — record it normally"); return null; }
+      if (!foundMatch.p1 || !foundMatch.p2) { flash("Match has no players"); return null; }
+      if (newWinnerId !== foundMatch.p1 && newWinnerId !== foundMatch.p2) { flash("Invalid winner — must be one of the two players"); return null; }
+
+      // ── Apply the edit to the match itself ──
+      foundMatch.winner = newWinnerId;
+      foundMatch.score1 = newScore1;
+      foundMatch.score2 = newScore2;
+      foundMatch.completedAt = nw();
+      // (completed stays true)
+
+      // ── Cascade: clear every downstream match ──
+      // From (foundRoundIdx, foundMatchIdx), walk forward through rounds.
+      // Each step the match index halves (via floor division).
+      let descRoundIdx = foundRoundIdx + 1;
+      let descMatchIdx = Math.floor(foundMatchIdx / 2);
+      let touchedFinal = false;
+      while (descRoundIdx < bracket.rounds.length) {
+        const dRound = bracket.rounds[descRoundIdx];
+        if (!dRound || !dRound.matches[descMatchIdx]) break;
+        const d = dRound.matches[descMatchIdx];
+        // Track if this chain reaches the final
+        if (descRoundIdx === bracket.rounds.length - 1) touchedFinal = true;
+        // Clear everything about this match. Don't touch matchIdx/round/id —
+        // those are structural.
+        d.p1 = null;
+        d.p2 = null;
+        d.p1Seed = null;
+        d.p2Seed = null;
+        d.score1 = null;
+        d.score2 = null;
+        d.winner = null;
+        d.completed = false;
+        d.completedAt = null;
+        d.isBye = false;
+        descRoundIdx += 1;
+        descMatchIdx = Math.floor(descMatchIdx / 2);
+      }
+      // Special case: if the edited match IS the final itself, the cascade
+      // loop never executes (no downstream). The champion needs to be updated
+      // to reflect the new winner of the final.
+      const editedIsFinal = foundRoundIdx === bracket.rounds.length - 1;
+
+      // ── BUT: the other side of the immediate next match might still be
+      // valid (e.g. we edited Round 1 Match 0; the winner of R1 M1 advanced
+      // and is still legitimately in R2 M0). After clearing R2 M0 entirely
+      // above, we need to restore that other side from its source match.
+      // Same logic for each downstream cleared match: the OTHER source of
+      // each cleared match still has a valid winner from a chain we didn't
+      // touch.
+      const restoreOtherSides = () => {
+        // Walk from the layer just past foundRoundIdx forward. For each
+        // cleared match, check if its sibling source (not the one we
+        // just edited) has a valid completed match upstream.
+        // Actually — since we cleared a chain of matches, we need to repopulate
+        // each one's sides from whatever upstream sources are still legitimate.
+        // The cleanest approach: starting from (foundRoundIdx + 1) onward, for
+        // every match we cleared, look at BOTH of its source matches and copy
+        // their winners forward IF those sources are still completed.
+        for (let r = foundRoundIdx + 1; r < bracket.rounds.length; r++) {
+          // Which match indices in round r descend from our edited path?
+          // Only one descendant per round (since cascade halves the index).
+          // We need that descendant's index at round r.
+          let chainIdx = foundMatchIdx;
+          for (let step = foundRoundIdx + 1; step <= r; step++) {
+            chainIdx = Math.floor(chainIdx / 2);
+          }
+          const dMatch = bracket.rounds[r].matches[chainIdx];
+          if (!dMatch) continue;
+          const prevRound = bracket.rounds[r - 1];
+          // chainIdx in round r descends from indices (chainIdx*2, chainIdx*2+1) in r-1
+          const srcTopIdx = chainIdx * 2;
+          const srcBotIdx = chainIdx * 2 + 1;
+          const srcTop = prevRound.matches[srcTopIdx];
+          const srcBot = prevRound.matches[srcBotIdx];
+          // Copy winner of each completed source into the corresponding slot
+          if (srcTop && srcTop.completed && srcTop.winner) {
+            dMatch.p1 = srcTop.winner;
+            dMatch.p1Seed = (srcTop.winner === srcTop.p1) ? srcTop.p1Seed : srcTop.p2Seed;
+          }
+          if (srcBot && srcBot.completed && srcBot.winner) {
+            dMatch.p2 = srcBot.winner;
+            dMatch.p2Seed = (srcBot.winner === srcBot.p1) ? srcBot.p1Seed : srcBot.p2Seed;
+          }
+        }
+      };
+      restoreOtherSides();
+
+      // Now propagate the NEW winner of the edited match into the immediate
+      // next round (this happens automatically via restoreOtherSides since
+      // foundMatch is now a "completed source" for its descendant).
+
+      // ── Champion handling ──
+      // Three cases:
+      //   1. The edited match IS the final itself → champion replaced by new winner
+      //   2. The cascade reached the final → champion cleared (final must be replayed)
+      //   3. Otherwise → champion preserved (the edit was on an unrelated path
+      //      or upstream of an already-cleared chain that didn't touch the final)
+      let champion = (cur.champion === undefined) ? null : cur.champion;
+      if (editedIsFinal) {
+        const champName = (cur.players.find(p => p.id === newWinnerId) || {}).name || "?";
+        champion = { id: newWinnerId, name: champName, crownedAt: nw(), season: "Summer 2026" };
+      } else if (touchedFinal) {
+        champion = null;
+      }
+
+      const editedRoundLabel = foundRoundIdx === bracket.rounds.length - 1 ? "Final"
+        : foundRoundIdx === bracket.rounds.length - 2 ? "Semifinal"
+        : foundRoundIdx === bracket.rounds.length - 3 ? "Quarterfinal"
+        : "Round " + (foundRoundIdx + 1);
+      const newWinnerName = (cur.players.find(p => p.id === newWinnerId) || {}).name || "?";
+      flash("Edited: " + editedRoundLabel + " — " + newWinnerName + " now advances");
+
+      return withLog(
+        { ...cur, bracket, champion },
+        "BRACKET_MATCH_EDITED",
+        `${editedRoundLabel} re-decided in favor of ${newWinnerName} — downstream cleared`
+      );
+    }, "Couldn't edit bracket match");
   };
 
   // Undo bracket: clears bracket and re-opens seeding phase (mirrors undoCyc).
@@ -1084,7 +1227,7 @@ function App() {
         {view === "home" && <Home st={st} ladder={activeLad} gn={gn} ini={ini} cd={cd} requestJoin={requestJoin} />}
         {view === "boxes" && <BoxesV st={st} gn={gn} ini={ini} logR={logR} ffM={ffM} />}
         {view === "matches" && <MatchesV st={st} gn={gn} logR={logR} ffM={ffM} />}
-        {view === "bracket" && <BracketV st={st} gn={gn} ladder={ladder} recordBracketMatch={recordBracketMatch} isAdmin={!SPECTATOR} />}
+        {view === "bracket" && <BracketV st={st} gn={gn} ladder={ladder} recordBracketMatch={recordBracketMatch} editBracketMatch={editBracketMatch} isAdmin={!SPECTATOR} />}
         {view === "checkin" && <CheckInV st={st} ladder={ladder} togCI={togCI} selLast={selLast} autoOpen={checkInFocus} onAutoOpenDone={() => setCheckInFocus(false)} />}
         {view === "rules" && <RulesV />}
         {view === "admin" && <AdminV st={st} ladder={ladder} previewCyc={previewCyc} confirmCyc={confirmCyc} completeCyc={completeCyc} endEarlyCyc={endEarlyCyc} undoCyc={undoCyc} resetAll={resetAll} addP={addP} rmP={rmP} ffM={ffM} gn={gn} save={save} togCI={togCI} approvePlayer={approvePlayer} rejectPlayer={rejectPlayer} endSeedingPhase={endSeedingPhase} undoBracket={undoBracket} backupNow={backupNow} />}
@@ -1773,10 +1916,16 @@ function MatchesV({ st, gn, logR, ffM }) {
 
 // ─── BRACKET ─────────────────────────────────────────────────
 // Locked view if seeding hasn't ended; full bracket display otherwise.
-function BracketV({ st, gn, ladder, recordBracketMatch, isAdmin }) {
+function BracketV({ st, gn, ladder, recordBracketMatch, editBracketMatch, isAdmin }) {
   const [selectedMatch, setSelectedMatch] = useState(null);
   const [s1, setS1] = useState("");
   const [s2, setS2] = useState("");
+  // Edit-mode state — separate from the record-mode modal
+  const [editingMatch, setEditingMatch] = useState(null);
+  const [editS1, setEditS1] = useState("");
+  const [editS2, setEditS2] = useState("");
+  const [editConfirmText, setEditConfirmText] = useState("");
+  const [pendingEditWinner, setPendingEditWinner] = useState(null);
 
   // ─── LOCKED STATE ───
   if (!st.seedingPhaseEnded || !st.bracket) {
@@ -1882,11 +2031,158 @@ function BracketV({ st, gn, ladder, recordBracketMatch, isAdmin }) {
     );
   })();
 
+  // ─── EDIT MATCH MODAL ───
+  // Shown when admin taps a completed (non-bye) match. Allows correcting the
+  // winner and/or score. Requires typing "EDIT" to confirm — this is a
+  // destructive operation that clears all downstream matches.
+  const editModal = editingMatch && (() => {
+    const m = editingMatch;
+    const p1Name = gn(m.p1);
+    const p2Name = gn(m.p2);
+    // Count how many downstream matches will be cleared (for the warning)
+    let descCount = 0;
+    let descRoundIdx = -1, descMatchIdx = -1;
+    // Find this match's position in the bracket
+    br.rounds.forEach((r, ri) => r.matches.forEach((mm, mi) => {
+      if (mm.id === m.id) { descRoundIdx = ri; descMatchIdx = mi; }
+    }));
+    if (descRoundIdx >= 0) {
+      let r = descRoundIdx + 1;
+      let idx = Math.floor(descMatchIdx / 2);
+      while (r < br.rounds.length) {
+        const dm = br.rounds[r].matches[idx];
+        if (dm && (dm.completed || dm.p1 || dm.p2)) descCount += 1;
+        r += 1;
+        idx = Math.floor(idx / 2);
+      }
+    }
+    const reachesFinal = descRoundIdx >= 0 && (() => {
+      // Check if cascade reaches the final
+      let r = descRoundIdx + 1;
+      let idx = Math.floor(descMatchIdx / 2);
+      while (r < br.rounds.length) {
+        if (r === br.rounds.length - 1) return true;
+        r += 1;
+        idx = Math.floor(idx / 2);
+      }
+      return false;
+    })();
+    const editedIsFinal = descRoundIdx === br.rounds.length - 1;
+    const championAtRisk = (reachesFinal || editedIsFinal) && !!st.champion;
+
+    const trySubmit = (winnerId) => {
+      const raw1 = (editS1 === "" || editS1 == null) ? "0" : String(editS1);
+      const raw2 = (editS2 === "" || editS2 == null) ? "0" : String(editS2);
+      const n1 = parseInt(raw1, 10), n2 = parseInt(raw2, 10);
+      if (isNaN(n1) || isNaN(n2)) { alert("Please enter numbers for both scores."); return; }
+      if (n1 < 0 || n2 < 0 || n1 > 3 || n2 > 3) { alert("Best of 5: each score must be between 0 and 3."); return; }
+      if (n1 === n2) { alert("Scores can't be tied — there has to be a winner."); return; }
+      const winnerScore = winnerId === m.p1 ? n1 : n2;
+      const loserScore = winnerId === m.p1 ? n2 : n1;
+      if (winnerScore !== 3) { alert("The winner must have 3 racks (best of 5). You entered " + winnerScore + " for the winner."); return; }
+      if (loserScore >= winnerScore) { alert("Winner's score must be higher than the loser's."); return; }
+      // Show confirmation step
+      setPendingEditWinner({ id: winnerId, s1: n1, s2: n2 });
+    };
+
+    const finalize = () => {
+      if (!pendingEditWinner) return;
+      editBracketMatch(m.id, pendingEditWinner.id, pendingEditWinner.s1, pendingEditWinner.s2);
+      setEditingMatch(null);
+      setEditS1(""); setEditS2("");
+      setEditConfirmText("");
+      setPendingEditWinner(null);
+    };
+
+    const close = () => {
+      setEditingMatch(null);
+      setEditS1(""); setEditS2("");
+      setEditConfirmText("");
+      setPendingEditWinner(null);
+    };
+
+    const editScoreInput = { background: "rgba(255,255,255,.06)", border: "1px solid rgba(255,255,255,.18)", borderRadius: 8, padding: "6px 8px", color: P.white, fontSize: 15, fontWeight: 700, width: 44, textAlign: "center", fontFamily: "DM Sans,sans-serif" };
+
+    const roundLabel = descRoundIdx === br.rounds.length - 1 ? "Final"
+      : descRoundIdx === br.rounds.length - 2 ? "Semifinal"
+      : descRoundIdx === br.rounds.length - 3 ? "Quarterfinal"
+      : "Round " + (descRoundIdx + 1);
+
+    return (
+      <div style={{ position: "fixed", inset: 0, zIndex: 9999, background: "rgba(0,10,20,.85)", backdropFilter: "blur(6px)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }} onClick={close}>
+        <div style={{ ...gc, maxWidth: 420, width: "100%", padding: 20, borderColor: "rgba(248,113,113,.4)" }} onClick={e => e.stopPropagation()}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+            <span style={{ fontSize: 14 }}>✏️</span>
+            <h3 style={{ fontSize: 14, fontWeight: 700, color: P.bad, letterSpacing: 1.5, textTransform: "uppercase", margin: 0 }}>Edit {roundLabel} Result</h3>
+          </div>
+          <p style={{ fontSize: 11, color: P.grey, marginBottom: 14, lineHeight: 1.5 }}>Correct a mistake. Changing the winner will clear {descCount > 0 ? `${descCount} downstream match${descCount === 1 ? '' : 'es'}` : "no downstream matches"}{championAtRisk ? " and reset the champion" : ""}.</p>
+
+          {!pendingEditWinner ? (
+            <>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10, padding: "10px 12px", background: P.glass, borderRadius: 10, border: "1px solid " + P.gb }}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 9, color: P.dim, letterSpacing: 1, marginBottom: 2 }}>SEED {m.p1Seed || "?"}{m.winner === m.p1 && <span style={{ color: P.ok, marginLeft: 6, fontWeight: 700 }}>· CURRENT WINNER</span>}</div>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: P.white }}>{p1Name}</div>
+                </div>
+                <input type="number" min="0" max="3" value={editS1} onChange={e => setEditS1(e.target.value)} style={editScoreInput} />
+              </div>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16, padding: "10px 12px", background: P.glass, borderRadius: 10, border: "1px solid " + P.gb }}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 9, color: P.dim, letterSpacing: 1, marginBottom: 2 }}>SEED {m.p2Seed || "?"}{m.winner === m.p2 && <span style={{ color: P.ok, marginLeft: 6, fontWeight: 700 }}>· CURRENT WINNER</span>}</div>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: P.white }}>{p2Name}</div>
+                </div>
+                <input type="number" min="0" max="3" value={editS2} onChange={e => setEditS2(e.target.value)} style={editScoreInput} />
+              </div>
+              <p style={{ fontSize: 10, color: P.dim, marginBottom: 8, textAlign: "center" }}>Select the corrected winner</p>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button onClick={() => trySubmit(m.p1)} style={{ flex: 1, padding: "10px 8px", background: m.winner === m.p1 ? "rgba(52,211,153,.2)" : "linear-gradient(135deg," + P.ok + ",#0e9c6f)", border: m.winner === m.p1 ? "1px solid " + P.ok : "none", borderRadius: 10, color: P.white, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>{p1Name} wins</button>
+                <button onClick={() => trySubmit(m.p2)} style={{ flex: 1, padding: "10px 8px", background: m.winner === m.p2 ? "rgba(52,211,153,.2)" : "linear-gradient(135deg," + P.ok + ",#0e9c6f)", border: m.winner === m.p2 ? "1px solid " + P.ok : "none", borderRadius: 10, color: P.white, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>{p2Name} wins</button>
+              </div>
+              <button onClick={close} style={{ width: "100%", marginTop: 10, padding: "8px", background: "transparent", border: "1px solid " + P.dim, borderRadius: 10, color: P.dim, fontSize: 11, fontWeight: 700, cursor: "pointer" }}>Cancel</button>
+            </>
+          ) : (
+            <>
+              <div style={{ background: "rgba(248,113,113,.08)", border: "1px solid rgba(248,113,113,.3)", borderRadius: 10, padding: "12px 14px", marginBottom: 14 }}>
+                <p style={{ fontSize: 11, color: P.bad, fontWeight: 700, marginBottom: 6, letterSpacing: 1 }}>⚠ THIS WILL:</p>
+                <ul style={{ fontSize: 11, color: P.off, paddingLeft: 18, margin: 0, lineHeight: 1.7 }}>
+                  <li>Change {roundLabel} winner to <strong style={{ color: P.white }}>{gn(pendingEditWinner.id)}</strong> ({pendingEditWinner.s1}–{pendingEditWinner.s2})</li>
+                  {descCount > 0 && <li>Clear <strong style={{ color: P.bad }}>{descCount} downstream match{descCount === 1 ? '' : 'es'}</strong> that need to be replayed</li>}
+                  {championAtRisk && editedIsFinal && <li>Change the <strong style={{ color: P.orange }}>champion</strong> to {gn(pendingEditWinner.id)}</li>}
+                  {championAtRisk && !editedIsFinal && <li>Remove the current <strong style={{ color: P.bad }}>champion</strong> (final must be replayed)</li>}
+                </ul>
+                <p style={{ fontSize: 10, color: P.dim, marginTop: 8, fontStyle: "italic" }}>A backup is created automatically before the change.</p>
+              </div>
+              <p style={{ fontSize: 11, color: P.off, marginBottom: 6, textAlign: "center" }}>Type <strong style={{ color: P.bad, letterSpacing: 1 }}>EDIT</strong> to confirm</p>
+              <input value={editConfirmText} onChange={e => setEditConfirmText(e.target.value)} placeholder="Type EDIT" autoFocus style={{ width: "100%", marginBottom: 12, padding: "10px 12px", background: "rgba(0,20,40,.6)", border: "1px solid " + P.gb, borderRadius: 10, color: P.white, fontSize: 14, fontWeight: 700, textAlign: "center", letterSpacing: 3, boxSizing: "border-box" }} />
+              <div style={{ display: "flex", gap: 8 }}>
+                <button
+                  disabled={editConfirmText !== "EDIT"}
+                  onClick={finalize}
+                  style={{
+                    flex: 1, padding: "10px 8px",
+                    background: editConfirmText === "EDIT" ? "linear-gradient(135deg," + P.bad + ",#dc2626)" : "rgba(248,113,113,.25)",
+                    border: "none", borderRadius: 10, color: P.white, fontSize: 12, fontWeight: 700,
+                    cursor: editConfirmText === "EDIT" ? "pointer" : "not-allowed",
+                    opacity: editConfirmText === "EDIT" ? 1 : 0.5,
+                  }}
+                >Confirm Edit</button>
+                <button onClick={() => setPendingEditWinner(null)} style={{ flex: 1, padding: "10px 8px", background: "transparent", border: "1px solid " + P.dim, borderRadius: 10, color: P.dim, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Back</button>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    );
+  })();
+
   // ─── MATCH CARD ───
   const renderMatchCard = (m, isFinalMatch) => {
     const p1Name = m.p1 ? gn(m.p1) : (m.isBye ? "BYE" : "TBD");
     const p2Name = m.p2 ? gn(m.p2) : (m.isBye ? "BYE" : "TBD");
     const canRecord = isAdmin && !m.completed && m.p1 && m.p2 && !m.isBye;
+    // Admin can ALSO click a completed (non-bye) match to edit it
+    const canEdit = isAdmin && m.completed && !m.isBye && m.p1 && m.p2;
+    const isClickable = canRecord || canEdit;
     const w = m.winner;
     const p1Won = w && w === m.p1;
     const p2Won = w && w === m.p2;
@@ -1927,10 +2223,22 @@ function BracketV({ st, gn, ladder, recordBracketMatch, isAdmin }) {
       </div>
     );
 
+    const openCard = () => {
+      if (canRecord) {
+        setSelectedMatch(m); setS1(""); setS2("");
+      } else if (canEdit) {
+        setEditingMatch(m);
+        setEditS1(String(m.score1 ?? ""));
+        setEditS2(String(m.score2 ?? ""));
+        setEditConfirmText("");
+        setPendingEditWinner(null);
+      }
+    };
+
     return (
       <div
         key={m.id}
-        onClick={canRecord ? () => { setSelectedMatch(m); setS1(""); setS2(""); } : undefined}
+        onClick={isClickable ? openCard : undefined}
         style={{
           position: "absolute",
           left: matchPositions[m.id].x,
@@ -1943,19 +2251,22 @@ function BracketV({ st, gn, ladder, recordBracketMatch, isAdmin }) {
           boxShadow: canRecord
             ? "0 0 0 1px rgba(241,138,0,.18), 0 4px 12px rgba(0,0,0,.4)"
             : m.completed ? "0 2px 8px rgba(0,0,0,.3)" : "0 2px 6px rgba(0,0,0,.25)",
-          cursor: canRecord ? "pointer" : "default",
+          cursor: isClickable ? "pointer" : "default",
           overflow: "hidden",
           transition: "transform .15s, box-shadow .15s",
           animation: canRecord ? "bracketPulse 2.4s ease-in-out infinite" : "none",
         }}
-        onMouseEnter={canRecord ? e => { e.currentTarget.style.transform = "translateY(-1px)"; } : undefined}
-        onMouseLeave={canRecord ? e => { e.currentTarget.style.transform = "translateY(0)"; } : undefined}
+        onMouseEnter={isClickable ? e => { e.currentTarget.style.transform = "translateY(-1px)"; } : undefined}
+        onMouseLeave={isClickable ? e => { e.currentTarget.style.transform = "translateY(0)"; } : undefined}
       >
         {playerRow(p1Name, m.p1Seed, m.completed && p1Won, m.completed && !p1Won && !m.isBye, m.score1, !m.p1 && !m.isBye)}
         <div style={{ height: 1, background: "rgba(255,255,255,.06)" }} />
         {playerRow(p2Name, m.p2Seed, m.completed && p2Won, m.completed && !p2Won && !m.isBye, m.score2, !m.p2 && !m.isBye)}
         {canRecord && (
           <div style={{ position: "absolute", top: 3, right: 5, fontSize: 7, fontWeight: 800, color: P.orange, letterSpacing: 1, background: "rgba(241,138,0,.12)", padding: "1px 5px", borderRadius: 3, border: "1px solid rgba(241,138,0,.3)" }}>TAP</div>
+        )}
+        {canEdit && !canRecord && (
+          <div style={{ position: "absolute", top: 3, right: 5, fontSize: 7, fontWeight: 800, color: P.dim, letterSpacing: 1, background: "rgba(255,255,255,.04)", padding: "1px 5px", borderRadius: 3, border: "1px solid rgba(255,255,255,.08)" }}>EDIT</div>
         )}
         {m.isBye && (
           <div style={{ position: "absolute", top: 3, right: 5, fontSize: 7, fontWeight: 800, color: P.dim, letterSpacing: 1, background: "rgba(255,255,255,.04)", padding: "1px 5px", borderRadius: 3, border: "1px solid rgba(255,255,255,.06)" }}>BYE</div>
@@ -2125,6 +2436,7 @@ function BracketV({ st, gn, ladder, recordBracketMatch, isAdmin }) {
       </div>
 
       {matchModal}
+      {editModal}
     </div>
   );
 }
