@@ -440,7 +440,12 @@ function App() {
       const snap = await DOC_REF.get();
       if (!snap.exists) { flash("Nothing to back up"); return false; }
       const data = snap.data();
-      const id = "backup-" + Date.now();
+      // Human-readable ID that sorts chronologically: backup-2026-06-05_16-11-35-360Z
+      // (Firestore doc IDs can't contain / or . but : would also be hard to read,
+      // so we replace both colons and dots with dashes.)
+      const ts = new Date().toISOString().replace(/[:.]/g, "-").replace("T", "_");
+      const slug = reason.toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
+      const id = "backup-" + ts + (slug && slug !== "manual" ? "__" + slug : "");
       await DOC_REF.collection("backups").doc(id).set({
         ...data, _backupReason: reason, _backupAt: nw(), _backupId: id
       });
@@ -667,8 +672,10 @@ function App() {
       if (snap.exists) {
         const data = snap.data();
         if ((data.players || []).length > 0 || (data.pastCycles || []).length > 0) {
+          const ts = new Date().toISOString().replace(/[:.]/g, "-").replace("T", "_");
+          const id = "backup-" + ts + "__pre-reset";
           await db.collection("league").doc("state").collection("backups")
-            .doc("pre-reset-" + Date.now()).set({ ...data, _backupReason: "manual reset", _backupAt: nw() });
+            .doc(id).set({ ...data, _backupReason: "manual reset", _backupAt: nw(), _backupId: id });
         }
       }
     } catch (e) { console.error("Pre-reset backup failed (continuing):", e); }
